@@ -1,5 +1,8 @@
 const MAX_EDGE = 1400
 const JPEG_QUALITY = 0.82
+const FOTOS_BUCKET = 'fotos'
+
+import { isSupabase, supabase } from './supabase.js'
 
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
@@ -52,24 +55,50 @@ export function compressImage(file) {
   })
 }
 
-export async function uploadPhoto(file) {
-  const blob = await compressImage(file)
-  const image = await blobToBase64(blob)
-  const endpoint = import.meta.env.VITE_UPLOAD_URL || (import.meta.env.DEV ? '/api/upload' : '')
-  if (!endpoint) {
-    throw new Error('No GitHub Pages, cole o link da foto ou configure o GAS (VITE_UPLOAD_URL).')
-  }
-  const res = await fetch(endpoint, {
+async function uploadViaEndpoint(image, name) {
+  const res = await fetch(import.meta.env.VITE_UPLOAD_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      image,
-      name: (file.name || 'produto').replace(/\.[^.]+$/, '')
-    })
+    body: JSON.stringify({ image, name })
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok || !data.url) {
     throw new Error(data.error || 'Falha no upload da imagem.')
   }
   return data.url
+}
+
+async function uploadViaSupabaseStorage(blob, file) {
+  if (!isSupabase) throw new Error('Nenhum destino de upload configurado.')
+  const { data: authData } = await supabase.auth.getUser()
+  if (!authData.user) throw new Error('Sessão expirada. Entre de novo para subir a foto.')
+  const ext = (file?.name?.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg'
+  const path = `${authData.user.id}/${Date.now()}.${ext}`
+  const { error } = await supabase.storage.from(FOTOS_BUCKET).upload(path, blob, {
+    contentType: blob.type || 'image/jpeg',
+    upsert: false
+  })
+  if (error) {
+    if (error.message && /bucket|Bucket/i.test(error.message)) {
+      throw new Error('Bucket "fotos" não existe. Rode supabase/storage.sql no SQL Editor.')
+    }
+    throw new Error(error.message || 'Falha ao salvar a imagem.')
+  }
+  const { data: pub } = supabase.storage.from(FOTOS_BUCKET).getPublicUrl(path)
+  return pub.publicUrl
+}
+
+export async function uploadPhoto(file) {
+  const blob = await compressImage(file)
+  const name = (file.name || 'produto').replace(/\.[^.]+$/, '').slice(0, 80)
+
+  const endpoint =
+    import.meta.env.VITE_UPLOAD_URL || (import.meta.env.DEV ? '/api/upload' : '')
+
+  if (endpoint) {
+    const image = await blobToBase64(blob)
+    return uploadViaEndpoint(image, name)
+  }
+
+  return uploadViaSupabaseStorage(blob, file)
 }

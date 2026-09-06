@@ -4,6 +4,7 @@ import { localDb } from '../lib/local.js'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import { money, uid } from '../lib/format.js'
 import { buildOrderMessage, openWhatsApp } from '../lib/whatsapp.js'
+import Brand from '../components/Brand.jsx'
 
 export default function PublicStore() {
   const { slug } = useParams()
@@ -116,11 +117,39 @@ export default function PublicStore() {
 
   if (!store) return <main className="wrap" style={{ padding: 48 }}>Abrindo vitrine...</main>
 
-  const cover = store.cover_url || 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?auto=format&fit=crop&w=1400&q=80'
+  const cover = store.cover_url || ''
+  const heroStyle = cover
+    ? {
+        background: `linear-gradient(180deg, rgba(0,0,0,.12), var(--veil)), url(${cover}) center/cover`
+      }
+    : {}
+
+  const links = store.links || []
+  const seen = new Set()
+  const displayLinks = links.filter((l) => {
+    const key = `${l.url || ''}|${(l.label || '').toLowerCase()}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  const hasInstaLink = store.instagram
+    ? displayLinks.some((l) => l.url && l.url.toLowerCase().includes(`instagram.com/${store.instagram.toLowerCase()}`))
+    : true
+
+  const isFree = store.plan !== 'pro'
 
   return (
     <div className={`theme-${store.theme || 'bosque'}`}>
-      <header className="store-hero" style={{ background: `linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.62)), url(${cover}) center/cover` }}>
+      {isFree && (
+        <div className="freebar">
+          <Brand onDark />
+          <div className="row">
+            <span className="hide-sm">Vitrine grátis — nossa marca aparece para o cliente.</span>
+            <Link className="cta" to="/criar">Criar a minha grátis</Link>
+          </div>
+        </div>
+      )}
+      <header className="store-hero" style={heroStyle}>
         <div className="wrap stack">
           {store.avatar_url ? (
             <img className="avatar" src={store.avatar_url} alt="" />
@@ -132,12 +161,12 @@ export default function PublicStore() {
             <p style={{ color: '#f3eee4' }}>{store.bio}</p>
           </div>
           <div className="row" style={{ flexWrap: 'wrap' }}>
-            {(store.links || []).map((link) => (
+            {displayLinks.map((link) => (
               <a key={link.id} className="btn btn-ghost" style={{ background: 'rgba(255,255,255,.16)', color: '#fff', borderColor: 'transparent' }} href={link.url} target="_blank" rel="noreferrer">
                 {link.label}
               </a>
             ))}
-            {store.instagram && (
+            {store.instagram && !hasInstaLink && (
               <a className="btn btn-ghost" style={{ background: 'rgba(255,255,255,.16)', color: '#fff', borderColor: 'transparent' }} href={`https://instagram.com/${store.instagram}`} target="_blank" rel="noreferrer">
                 Instagram
               </a>
@@ -153,7 +182,7 @@ export default function PublicStore() {
       <main className="wrap" style={{ padding: '18px 0 90px' }}>
         <div className="row" style={{ overflowX: 'auto', paddingBottom: 8 }}>
           {cats.map((c) => (
-            <button key={c} className={`btn ${category === c ? 'btn-dark' : 'btn-ghost'}`} onClick={() => setCategory(c)}>
+            <button key={c} className={`btn ${category === c ? 'btn-theme' : 'btn-ghost'}`} onClick={() => setCategory(c)}>
               {c}
             </button>
           ))}
@@ -169,14 +198,14 @@ export default function PublicStore() {
                   <span className="price">{money(p.price)}</span>
                   {Number(p.compare_at) > 0 && <span className="old">{money(p.compare_at)}</span>}
                 </div>
-                <button className="btn btn-dark" onClick={() => add(p)}>Adicionar</button>
+                <button className="btn btn-theme" onClick={() => add(p)}>Adicionar</button>
               </div>
             </article>
           ))}
         </div>
-        {store.plan !== 'pro' && (
-          <p className="center tiny muted" style={{ marginTop: 28 }}>
-            Feito com <Link to="/">VitrineZap</Link>
+        {isFree && (
+          <p className="center tiny" style={{ marginTop: 28 }}>
+            <Link to="/criar" className="muted">Criado com VitrineZap — remova a nossa marca no Plano Loja.</Link>
           </p>
         )}
       </main>

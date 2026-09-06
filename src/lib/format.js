@@ -1,4 +1,4 @@
-export const FREE_PRODUCT_LIMIT = 15
+export const FREE_PRODUCT_LIMIT = 8
 
 export const RESERVED_SLUGS = [
   'entrar',

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext.jsx'
+import Brand from '../components/Brand.jsx'
 import PhotoInput from '../components/PhotoInput.jsx'
 import { FREE_PRODUCT_LIMIT, formatPhone, money, onlyDigits, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
 
@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [product, setProduct] = useState(null)
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
+  const [copiedLink, setCopiedLink] = useState(false)
   const url = publicUrl(store.slug)
   const isPro = store.plan === 'pro'
   const limitHit = !isPro && products.length >= FREE_PRODUCT_LIMIT
@@ -42,6 +43,22 @@ export default function Dashboard() {
     } catch (err) {
       setError(err.message)
     }
+  }
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      const el = document.createElement('textarea')
+      el.value = url
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+    }
+    setCopiedLink(true)
+    setMsg('')
+    setTimeout(() => setCopiedLink(false), 2000)
   }
 
   async function onSaveProduct(e) {
@@ -75,10 +92,7 @@ export default function Dashboard() {
     <div>
       <header className="nav">
         <div className="wrap between" style={{ padding: '12px 0' }}>
-          <Link to="/" className="brand">
-            <span className="logo">V</span>
-            {store.name}
-          </Link>
+          <Brand />
           <div className="row">
             <a className="btn btn-ghost" href={url} target="_blank" rel="noreferrer">Ver loja</a>
             <button className="btn btn-ghost" onClick={signOut}>Sair</button>
@@ -90,13 +104,20 @@ export default function Dashboard() {
         <div className="between">
           <div>
             <h2>Olá{user?.user_metadata?.name || user?.name ? `, ${user.user_metadata?.name || user.name}` : ''}</h2>
-            <p className="muted">{url}</p>
+            <p className="muted">{store.name}</p>
           </div>
           <div className="row">
             <span className="chip">{isPro ? 'Plano Loja' : 'Plano grátis'}</span>
             <span className="chip">{stats.novos} pedidos novos</span>
           </div>
         </div>
+
+        <section className="card pad copybox" style={{ margin: '18px 0' }}>
+          <input readOnly value={url} onFocus={(e) => e.target.select()} />
+          <button className={copiedLink ? 'btn btn-gold' : 'btn btn-dark'} onClick={copyLink}>
+            {copiedLink ? 'Copiado!' : 'Copiar link'}
+          </button>
+        </section>
 
         <div className="grid-3" style={{ margin: '18px 0' }}>
           <article className="card pad"><div className="tiny muted">Pedidos</div><h3>{stats.count}</h3></article>
@@ -158,7 +179,15 @@ export default function Dashboard() {
                 Novo produto
               </button>
             </div>
-            {limitHit && <p className="help">Limite do plano grátis atingido. Passe para o plano Loja para continuar.</p>}
+            {limitHit && (
+              <div className="card pad between" style={{ borderColor: '#c9a227', marginBottom: 12 }}>
+                <div>
+                  <strong>Você chegou ao limite do plano grátis ({FREE_PRODUCT_LIMIT} produtos).</strong>
+                  <div className="help">Assine o Plano Loja para cadastrar mais de {FREE_PRODUCT_LIMIT} e remover a marca VitrineZap da vitrine.</div>
+                </div>
+                <button className="btn btn-gold" onClick={() => setTab('plano')}>Ver plano</button>
+              </div>
+            )}
             {product && (
               <form className="card pad form" onSubmit={onSaveProduct}>
                 <label>Nome</label>

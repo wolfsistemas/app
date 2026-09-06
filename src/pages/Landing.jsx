@@ -1,7 +1,8 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import Nav from '../components/Nav.jsx'
-import { money } from '../lib/format.js'
+import { money, FREE_PRODUCT_LIMIT } from '../lib/format.js'
+import { isSupabase } from '../lib/supabase.js'
 import { DEMO_PRODUCTS, DEMO_STORE } from '../lib/seed.js'
 
 export default function Landing() {
@@ -20,9 +21,9 @@ export default function Landing() {
               </p>
               <div className="row">
                 <Link className="btn btn-dark" to="/criar">Criar minha vitrine grátis</Link>
-                <Link className="btn btn-ghost" to="/ana-atelier">Ver demo</Link>
+                {!isSupabase && <Link className="btn btn-ghost" to="/ana-atelier">Ver demo</Link>}
               </div>
-              <p className="tiny muted">Grátis até 15 produtos. Sem cartão. No ar em 3 minutos.</p>
+              <p className="tiny muted">Grátis até {FREE_PRODUCT_LIMIT} produtos. Sem cartão. No ar em 3 minutos.</p>
             </div>
             <div className="phone">
               <div className="phone-screen">
@@ -73,11 +74,11 @@ export default function Landing() {
             <article className="card pad stack">
               <span className="chip">Grátis</span>
               <h3>R$ 0</h3>
-              <p>Bio link + até 15 produtos. Ideal para testar com a loja real.</p>
+              <p>Bio link + até {FREE_PRODUCT_LIMIT} produtos. Ideal para testar com a loja real.</p>
               <ul className="muted">
                 <li>Link na bio com vitrine</li>
                 <li>Pedido no WhatsApp</li>
-                <li>Marca VitrineZap no rodapé</li>
+                <li>Marca VitrineZap na vitrine (sai no plano Loja)</li>
               </ul>
               <Link className="btn btn-ghost" to="/criar">Começar grátis</Link>
             </article>
@@ -86,8 +87,8 @@ export default function Landing() {
               <h3>R$ 19,90 / mês</h3>
               <p>Ilimitado, sem nossa marca, PIX no pedido e temas da loja.</p>
               <ul className="muted">
-                <li>Produtos ilimitados</li>
-                <li>Remove a marca</li>
+                <li>Produtos ilimitados (mais que {FREE_PRODUCT_LIMIT})</li>
+                <li>Remove a marca VitrineZap</li>
                 <li>Chave PIX no pedido</li>
                 <li>Pedidos organizados no painel</li>
               </ul>
