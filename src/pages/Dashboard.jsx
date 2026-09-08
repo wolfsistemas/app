@@ -1,8 +1,32 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext.jsx'
+import { isSupabase, supabase } from '../lib/supabase.js'
 import Brand from '../components/Brand.jsx'
 import PhotoInput from '../components/PhotoInput.jsx'
-import { FREE_PRODUCT_LIMIT, formatPhone, money, onlyDigits, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
+import { createCheckout, billingUrl } from '../lib/billing.js'
+import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_DURATION_DAYS, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
+
+function beep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.frequency.value = 880
+    gain.gain.setValueAtTime(0.001, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45)
+    osc.start()
+    osc.stop(ctx.currentTime + 0.5)
+    osc.onended = () => ctx.close()
+  } catch {
+    // sem áudio disponível
+  }
+}
 
 const TABS = [
   ['vitrine', 'Vitrine'],
@@ -13,16 +37,89 @@ const TABS = [
 ]
 
 export default function Dashboard() {
-  const { user, store, products, orders, saveStore, saveProduct, deleteProduct, updateOrder, signOut } = useAuth()
+  const { user, store, products, orders, saveStore, saveProduct, deleteProduct, updateOrder, addOrder, applyOrderPatch, signOut } = useAuth()
   const [tab, setTab] = useState('produtos')
   const [form, setForm] = useState(store)
   const [product, setProduct] = useState(null)
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
   const [copiedLink, setCopiedLink] = useState(false)
+  const [toast, setToast] = useState('')
+  const [billingBusy, setBillingBusy] = useState(false)
   const url = publicUrl(store.slug)
-  const isPro = store.plan === 'pro'
+  const isPro = isProStore(store)
+  const planEnd = planExpiresAt(store)
   const limitHit = !isPro && products.length >= FREE_PRODUCT_LIMIT
+  const { id: storeId } = store
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    const q = new URLSearchParams(location.search)
+    if (q.get('plano') === 'ok') {
+      navigate('/painel', { replace: true })
+      setMsg('Pagamento recebido! Seu plano já está ativo.')
+    }
+  }, [location.search])
+
+  useEffect(() => {
+    if (!isSupabase || !storeId) return undefined
+    const channel = supabase
+      .channel(`orders-${storeId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'orders',
+        filter: `store_id=eq.${storeId}`
+      }, (payload) => {
+        const row = payload.new
+        if (!row) return
+        addOrder(row)
+        beep()
+        const code = String(row.code || '').padStart(3, '0')
+        setToast(`Pedido nº ${code} · ${row.customer_name || 'Cliente'} · ${money(row.total)}`)
+        window.setTimeout(() => setToast(''), 7000)
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'orders',
+        filter: `store_id=eq.${storeId}`
+      }, (payload) => {
+        applyOrderPatch(payload.new.id, payload.new)
+      })
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [storeId])
+
+  async function upgrade() {
+    setError('')
+    setBillingBusy(true)
+    try {
+      const link = await createCheckout({
+        storeId,
+        email: user?.email || '',
+        name: user?.user_metadata?.name || ''
+      })
+      window.location.href = link
+    } catch (err) {
+      setError(err.message || 'Não foi possível abrir o pagamento.')
+    } finally {
+      setBillingBusy(false)
+    }
+  }
+
+  async function demoActivate() {
+    setError('')
+    try {
+      await saveStore({ plan: 'pro' })
+      setMsg('Plano ativado neste ambiente para testes.')
+    } catch (err) {
+      setError(err.message || 'Falha ao ativar.')
+    }
+  }
 
   const stats = useMemo(() => {
     const total = orders.reduce((s, o) => s + Number(o.total || 0), 0)
@@ -107,7 +204,11 @@ export default function Dashboard() {
             <p className="muted">{store.name}</p>
           </div>
           <div className="row">
-            <span className="chip">{isPro ? 'Plano Loja' : 'Plano grátis'}</span>
+            <span className={`chip ${isPro ? '' : 'chip-gold'}`}>
+              {isPro ? 'Plano Loja' : 'Plano grátis'}
+              {isPro && planEnd ? ` · até ${planEnd.toLocaleDateString('pt-BR')}` : ''}
+            </span>
+            {!isPro && store.plan === 'pro' && <span className="chip chip-rose">Expirado</span>}
             <span className="chip">{stats.novos} pedidos novos</span>
           </div>
         </div>
@@ -190,6 +291,9 @@ export default function Dashboard() {
             )}
             {product && (
               <form className="card pad form" onSubmit={onSaveProduct}>
+                {product.id && (
+                  <p className="help">Você está editando um produto existente.</p>
+                )}
                 <label>Nome</label>
                 <input required value={product.name} onChange={(e) => setProduct({ ...product, name: e.target.value })} />
                 <div className="grid-2">
@@ -217,32 +321,54 @@ export default function Dashboard() {
                 </div>
               </form>
             )}
-            <div className="grid-3">
-              {products.map((p) => (
-                <article className="card product-card" key={p.id}>
-                  {p.photo_url ? <img src={p.photo_url} alt="" /> : <div style={{ height: 120, background: '#eee' }} />}
-                  <div className="pad">
-                    <strong>{p.name}</strong>
-                    <div className="row">
-                      <span className="price">{money(p.price)}</span>
-                      {Number(p.compare_at) > 0 && <span className="old">{money(p.compare_at)}</span>}
+            {products.length === 0 && !product ? (
+              <div className="card pad center stack" style={{ marginTop: 12, textAlign: 'center' }}>
+                <h3>Nenhum produto ainda</h3>
+                <p className="muted">Cadastre seu primeiro produto para montar a vitrine.</p>
+                <div className="row" style={{ justifyContent: 'center' }}>
+                  <button className="btn btn-dark" onClick={() => setProduct({ name: '', price: '', category: 'Geral', description: '', photo_url: '', active: true })}>
+                    Cadastrar produto
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => setTab('vitrine')}>Configurar vitrine</button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid-3">
+                {products.map((p) => (
+                  <article className="card product-card" key={p.id}>
+                    {p.photo_url ? <img src={p.photo_url} alt={p.name} loading="lazy" /> : <div style={{ height: 120, background: '#eee' }} />}
+                    <div className="pad">
+                      <strong>{p.name}</strong>
+                      <div className="row">
+                        <span className="price">{money(p.price)}</span>
+                        {Number(p.compare_at) > 0 && <span className="old">{money(p.compare_at)}</span>}
+                      </div>
+                      <div className="row" style={{ marginTop: 10 }}>
+                        <button className="btn btn-ghost" onClick={() => setProduct(p)}>Editar</button>
+                        <button
+                          className="btn btn-rose"
+                          onClick={() => {
+                            if (!window.confirm(`Apagar "${p.name}"?`)) return
+                            deleteProduct(p.id).catch((err) => setError(err.message || 'Falha ao apagar.'))
+                          }}
+                        >
+                          Apagar
+                        </button>
+                      </div>
                     </div>
-                    <div className="row" style={{ marginTop: 10 }}>
-                      <button className="btn btn-ghost" onClick={() => setProduct(p)}>Editar</button>
-                      <button className="btn btn-rose" onClick={() => deleteProduct(p.id)}>Apagar</button>
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
         {tab === 'pedidos' && (
           <section className="card pad">
             <h3>Pedidos</h3>
-            {orders.length === 0 && <p>Os pedidos da vitrine aparecem aqui.</p>}
-            <table className="table">
+            {orders.length === 0 && <p className="help">Os pedidos feitos pelo WhatsApp aparecem aqui em tempo real, com som.</p>}
+            {orders.length > 0 && (
+              <table className="table">
               <thead>
                 <tr><th>Quando</th><th>Cliente</th><th>Itens</th><th>Total</th><th></th></tr>
               </thead>
@@ -264,6 +390,7 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+            )}
           </section>
         )}
 
@@ -307,27 +434,60 @@ export default function Dashboard() {
           <section className="grid-2">
             <article className="card pad stack">
               <h3>Grátis</h3>
-              <p>Até {FREE_PRODUCT_LIMIT} produtos, com marca VitrineZap.</p>
-              <span className="chip">{isPro ? 'Anterior' : 'Plano atual'}</span>
+              <p className="price">R$ 0</p>
+              <ul className="list">
+                <li>Até {FREE_PRODUCT_LIMIT} produtos na vitrine</li>
+                <li>Pedidos formatados no WhatsApp</li>
+                <li>Marca VitrineZap no rodapé da vitrine</li>
+                <li>1 tema de cor</li>
+              </ul>
+              <span className="chip">{isPro ? 'Plano anterior' : 'Plano atual'}</span>
             </article>
-            <article className="card pad stack">
-              <h3>Loja · R$ 19,90/mês</h3>
-              <p>Ilimitado, sem marca, PIX no pedido e temas.</p>
+            <article className={`card pad stack ${isPro ? 'card-gold' : ''}`}>
+              <h3>Plano Loja</h3>
+              <p className="price">{PLAN_PRICE}/30 dias</p>
+              <ul className="list">
+                <li>Produtos ilimitados</li>
+                <li>Sem a marca VitrineZap</li>
+                <li>Chave PIX no pedido</li>
+                <li>Todos os temas e suporte por e-mail</li>
+              </ul>
               {isPro ? (
-                <span className="chip">Ativo</span>
+                <>
+                  <span className="chip">Ativo{planEnd ? ` até ${planEnd.toLocaleDateString('pt-BR')}` : ''}</span>
+                  {billingUrl ? (
+                    <button className="btn btn-ghost" disabled={billingBusy} onClick={upgrade}>
+                      {billingBusy ? 'Aguarde...' : 'Renovar / assinar novamente'}
+                    </button>
+                  ) : null}
+                </>
               ) : (
-                <button className="btn btn-gold" onClick={() => persistStore({ plan: 'pro' })}>
-                  Ativar neste ambiente
-                </button>
+                <>
+                  <button className="btn btn-gold" disabled={billingBusy} onClick={upgrade}>
+                    {billingBusy ? 'Aguarde...' : billingUrl ? 'Assinar agora' : 'Ativar neste ambiente'}
+                  </button>
+                  {!billingUrl && (
+                    <p className="help">
+                      Sem cobrança configurada neste ambiente. Para simular, ative o plano aqui.
+                    </p>
+                  )}
+                </>
+              )}
+              {!isPro && !billingUrl && (
+                <button className="btn btn-ghost" onClick={demoActivate}>Ativar plano de teste</button>
+              )}
+              {!billingUrl && isPro && (
+                <p className="help">Ambiente de demonstração: o plano foi ativado manualmente.</p>
               )}
               <p className="help">
-                Em produção, este botão vira checkout Mercado Pago / Stripe. O webhook (Supabase Edge ou GAS)
-                marca a loja como pro.
+                Pagamento processado pela InfinitePay (Pix ou cartão). Na confirmação, o plano é liberado
+                automaticamente por {PLAN_DURATION_DAYS} dias via webhook.
               </p>
             </article>
           </section>
         )}
       </main>
+      {toast && <div className="toast" onClick={() => setToast('')}>{toast}</div>}
     </div>
   )
 }

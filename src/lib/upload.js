@@ -56,9 +56,10 @@ export function compressImage(file) {
 }
 
 async function uploadViaEndpoint(image, name) {
+  const token = import.meta.env.VITE_UPLOAD_TOKEN || ''
   const res = await fetch(import.meta.env.VITE_UPLOAD_URL, {
     method: 'POST',
-    body: JSON.stringify({ image, name })
+    body: JSON.stringify(token ? { image, name, token } : { image, name })
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok || !data.url) {

@@ -5,6 +5,7 @@ import Auth from './pages/Auth.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import PublicStore from './pages/PublicStore.jsx'
+import Analytics from './components/Analytics.jsx'
 import { useAuth } from './lib/AuthContext.jsx'
 
 function Guard({ children, needStore }) {
@@ -17,27 +18,30 @@ function Guard({ children, needStore }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Landing />} />
-      <Route path="/entrar" element={<Auth mode="login" />} />
-      <Route path="/criar" element={<Auth mode="signup" />} />
-      <Route
-        path="/comecar"
-        element={
-          <Guard>
-            <Onboarding />
-          </Guard>
-        }
-      />
-      <Route
-        path="/painel"
-        element={
-          <Guard needStore>
-            <Dashboard />
-          </Guard>
-        }
-      />
-      <Route path="/:slug" element={<PublicStore />} />
-    </Routes>
+    <>
+      <Analytics />
+      <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/entrar" element={<Auth mode="login" />} />
+        <Route path="/criar" element={<Auth mode="signup" />} />
+        <Route
+          path="/comecar"
+          element={
+            <Guard>
+              <Onboarding />
+            </Guard>
+          }
+        />
+        <Route
+          path="/painel"
+          element={
+            <Guard needStore>
+              <Dashboard />
+            </Guard>
+          }
+        />
+        <Route path="/:slug" element={<PublicStore />} />
+      </Routes>
+    </>
   )
 }

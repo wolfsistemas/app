@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { localDb } from '../lib/local.js'
 import { isSupabase, supabase } from '../lib/supabase.js'
-import { money, uid } from '../lib/format.js'
-import { buildOrderMessage, openWhatsApp } from '../lib/whatsapp.js'
+import { isProStore, money, uid } from '../lib/format.js'
+import { buildOrderMessage, whatsappUrl } from '../lib/whatsapp.js'
 import Brand from '../components/Brand.jsx'
 
 export default function PublicStore() {
@@ -13,9 +13,10 @@ export default function PublicStore() {
   const [cart, setCart] = useState([])
   const [category, setCategory] = useState('todos')
   const [checkout, setCheckout] = useState(false)
-  const [customer, setCustomer] = useState({ name: '', note: '' })
+  const [customer, setCustomer] = useState({ name: '', phone: '', note: '' })
   const [copied, setCopied] = useState('')
   const [missing, setMissing] = useState(false)
+  const [sending, setSending] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -71,10 +72,23 @@ export default function PublicStore() {
     )
   }
 
+  useEffect(() => {
+    document.title = store
+      ? `${store.name} · peça pelo WhatsApp`
+      : 'VitrineZap'
+    return () => {
+      document.title = 'VitrineZap — catalogo no WhatsApp'
+    }
+  }, [store])
+
   async function sendOrder() {
+    if (!customer.name || sending) return
+    setSending(true)
+    let orderCode = ''
     const order = {
       store_id: store.id,
       customer_name: customer.name,
+      customer_phone: customer.phone || '',
       items: cart.map(({ name, qty, price }) => ({ name, qty, price })),
       note: customer.note,
       total,
@@ -82,7 +96,19 @@ export default function PublicStore() {
       created_at: new Date().toISOString()
     }
     if (isSupabase) {
-      await supabase.from('orders').insert(order)
+      try {
+        const { data } = await supabase.rpc('create_order', {
+          p_store_id: order.store_id,
+          p_customer_name: order.customer_name,
+          p_customer_phone: order.customer_phone,
+          p_items: order.items,
+          p_note: order.note,
+          p_total: order.total
+        })
+        orderCode = data?.code ? String(data.code) : ''
+      } catch {
+        // o WhatsApp é a fonte da verdade; pedido no banco é bônus
+      }
     } else {
       localDb.saveOrder({ ...order, id: uid('order') })
     }
@@ -90,12 +116,23 @@ export default function PublicStore() {
       store,
       items: cart,
       customerName: customer.name,
+      customerPhone: customer.phone,
       note: customer.note,
-      pixKey: store.plan === 'pro' ? store.pix_key : ''
+      pixKey: isProStore(store) ? store.pix_key : '',
+      code: orderCode
     })
-    openWhatsApp(store.whatsapp, text)
+    const url = whatsappUrl(store.whatsapp, text)
+    const win = window.open('', '_blank')
+    if (win) {
+      win.opener = null
+      win.location = url
+    } else {
+      window.location.href = url
+    }
     setCheckout(false)
     setCart([])
+    setCustomer({ name: '', phone: '', note: '' })
+    setSending(false)
   }
 
   async function copyPix() {
@@ -136,7 +173,7 @@ export default function PublicStore() {
     ? displayLinks.some((l) => l.url && l.url.toLowerCase().includes(`instagram.com/${store.instagram.toLowerCase()}`))
     : true
 
-  const isFree = store.plan !== 'pro'
+  const isFree = !isProStore(store)
 
   return (
     <div className={`theme-${store.theme || 'bosque'}`}>
@@ -152,7 +189,7 @@ export default function PublicStore() {
       <header className="store-hero" style={heroStyle}>
         <div className="wrap stack">
           {store.avatar_url ? (
-            <img className="avatar" src={store.avatar_url} alt="" />
+            <img className="avatar" src={store.avatar_url} alt="" loading="lazy" />
           ) : (
             <div className="avatar">{store.name.slice(0, 1)}</div>
           )}
@@ -171,7 +208,7 @@ export default function PublicStore() {
                 Instagram
               </a>
             )}
-            {store.plan === 'pro' && store.pix_key && (
+            {store.plan === 'pro' && isProStore(store) && store.pix_key && (
               <button className="btn btn-gold" onClick={copyPix}>PIX {store.pix_key}</button>
             )}
           </div>
@@ -190,7 +227,7 @@ export default function PublicStore() {
         <div className="grid-3" style={{ marginTop: 12 }}>
           {visible.map((p) => (
             <article className="card product-card" key={p.id}>
-              {p.photo_url ? <img src={p.photo_url} alt={p.name} /> : <div style={{ height: 180, background: '#eee' }} />}
+              {p.photo_url ? <img src={p.photo_url} alt={p.name} loading="lazy" /> : <div style={{ height: 180, background: '#eee' }} />}
               <div className="pad stack">
                 <strong>{p.name}</strong>
                 {p.description && <p className="tiny">{p.description}</p>}
@@ -235,10 +272,13 @@ export default function PublicStore() {
               </div>
             ))}
             <strong>Total {money(total)}</strong>
-            <input placeholder="Seu nome" value={customer.name} onChange={(e) => setCustomer({ ...customer, name: e.target.value })} />
+            <input placeholder="Seu nome" required value={customer.name} onChange={(e) => setCustomer({ ...customer, name: e.target.value })} />
+            <input placeholder="Seu WhatsApp (opcional)" value={customer.phone} onChange={(e) => setCustomer({ ...customer, phone: e.target.value })} />
             <textarea placeholder="Observação (tamanho, entrega...)" value={customer.note} onChange={(e) => setCustomer({ ...customer, note: e.target.value })} />
-            {store.plan === 'pro' && store.pix_key && <p className="help">A chave PIX vai junto no texto do WhatsApp.</p>}
-            <button className="btn btn-whats" onClick={sendOrder}>Enviar no WhatsApp</button>
+            {isProStore(store) && store.pix_key && <p className="help">A chave PIX vai junto no texto do WhatsApp.</p>}
+            <button className="btn btn-whats" disabled={!customer.name || sending} onClick={sendOrder}>
+              {sending ? 'Enviando...' : 'Enviar no WhatsApp'}
+            </button>
           </div>
         </div>
       )}

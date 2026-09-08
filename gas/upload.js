@@ -4,6 +4,7 @@
  * 1. Cole este arquivo num projeto GAS.
  * 2. Project Settings > Script properties:
  *    IMGBB_API_KEY = sua chave
+ *    UPLOAD_TOKEN  = token compartilhado (mesmo valor do .env VITE_UPLOAD_TOKEN)
  * 3. Deploy > New deployment > Web app
  *    Execute as: Me
  *    Who has access: Anyone
@@ -11,10 +12,20 @@
  *    VITE_UPLOAD_URL=https://script.google.com/macros/s/.../exec
  *
  * A API do ImgBB não coloca a foto num álbum. Organize no site se quiser.
+ * O token é enviado dentro do corpo (campo token), já que o Apps Script não
+ * responde CORS a preflight — qualquer header customizado quebraria o upload.
  */
 
 function jsonOut(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON)
+}
+
+function authorized(e, body) {
+  const token = PropertiesService.getScriptProperties().getProperty('UPLOAD_TOKEN')
+  if (!token) return true
+  const header = (e.parameter && e.parameter.authorization) || ''
+  const headerToken = header.replace(/^Bearer\s+/i, '')
+  return headerToken === token || body.token === token
 }
 
 function doPost(e) {
@@ -22,6 +33,7 @@ function doPost(e) {
   if (!key) return jsonOut({ error: 'IMGBB_API_KEY ausente' })
 
   const body = JSON.parse((e.postData && e.postData.contents) || '{}')
+  if (!authorized(e, body)) return jsonOut({ error: 'Não autorizado' })
   if (!body.image) return jsonOut({ error: 'Imagem ausente' })
 
   const payload = {

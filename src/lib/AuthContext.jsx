@@ -5,12 +5,23 @@ import { uid } from './format'
 
 const AuthContext = createContext(null)
 
+function recoveryLinkPresent() {
+  try {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const query = new URLSearchParams(window.location.search)
+    return hash.get('type') === 'recovery' || query.get('type') === 'recovery'
+  } catch {
+    return false
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [store, setStore] = useState(null)
   const [products, setProducts] = useState([])
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
+  const [recovering, setRecovering] = useState(false)
 
   async function loadLocal(sessionUser) {
     const nextUser = sessionUser || localDb.currentUser()
@@ -68,10 +79,22 @@ export function AuthProvider({ children }) {
     ;(async () => {
       try {
         if (isSupabase) {
+          const recoveringNow = recoveryLinkPresent()
           const { data } = await supabase.auth.getSession()
           if (!alive) return
-          await loadSupabase(data.session?.user || null)
-          supabase.auth.onAuthStateChange((_e, session) => {
+          if (recoveringNow) {
+            setRecovering(true)
+          } else {
+            await loadSupabase(data.session?.user || null)
+          }
+          if (!alive) return
+          supabase.auth.onAuthStateChange((event, session) => {
+            if (event === 'PASSWORD_RECOVERY') {
+              setRecovering(true)
+              setUser(null)
+              setStore(null)
+              return
+            }
             loadSupabase(session?.user || null)
           })
         } else {
@@ -93,8 +116,29 @@ export function AuthProvider({ children }) {
       products,
       orders,
       loading,
+      recovering,
       isSupabase,
       refresh,
+      addOrder(row) {
+        setOrders((prev) => {
+          if (prev.some((o) => o.id === row.id)) return prev
+          return [row, ...prev]
+        })
+      },
+      applyOrderPatch(id, patch) {
+        setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)))
+      },
+      clearRecovery() {
+        setRecovering(false)
+      },
+      async updatePassword(password) {
+        if (!isSupabase) throw new Error('Modo local não usa recuperação.')
+        const { error } = await supabase.auth.updateUser({ password })
+        if (error) throw error
+        setRecovering(false)
+        const { data } = await supabase.auth.getUser()
+        await loadSupabase(data.user)
+      },
       async signUp({ email, password, name }) {
         if (isSupabase) {
           const { data, error } = await supabase.auth.signUp({

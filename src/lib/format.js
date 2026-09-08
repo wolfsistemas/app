@@ -1,5 +1,17 @@
 export const FREE_PRODUCT_LIMIT = 8
+export const PLAN_PRICE_CENTS = 1990
+export const PLAN_PRICE = 'R$ 19,90'
+export const PLAN_DURATION_DAYS = 30
 
+export function isProStore(store) {
+  if (!store || store.plan !== 'pro') return false
+  if (!store.plan_expires_at) return true
+  return new Date(store.plan_expires_at).getTime() > Date.now()
+}
+
+export function planExpiresAt(store) {
+  return store?.plan_expires_at ? new Date(store.plan_expires_at) : null
+}
 export const RESERVED_SLUGS = [
   'entrar',
   'criar',
