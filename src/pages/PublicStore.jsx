@@ -5,16 +5,18 @@ import { isSupabase, supabase } from '../lib/supabase.js'
 import { isProStore, money, uid } from '../lib/format.js'
 import { buildOrderMessage, whatsappUrl } from '../lib/whatsapp.js'
 import Brand from '../components/Brand.jsx'
+import PImg from '../components/PImg.jsx'
+import { useToast } from '../components/Toast.jsx'
 
 export default function PublicStore() {
   const { slug } = useParams()
+  const showToast = useToast()
   const [store, setStore] = useState(null)
   const [products, setProducts] = useState([])
   const [cart, setCart] = useState([])
   const [category, setCategory] = useState('todos')
   const [checkout, setCheckout] = useState(false)
   const [customer, setCustomer] = useState({ name: '', phone: '', note: '' })
-  const [copied, setCopied] = useState('')
   const [missing, setMissing] = useState(false)
   const [sending, setSending] = useState(false)
 
@@ -138,8 +140,7 @@ export default function PublicStore() {
   async function copyPix() {
     if (!store.pix_key) return
     await navigator.clipboard.writeText(store.pix_key)
-    setCopied('Chave PIX copiada')
-    setTimeout(() => setCopied(''), 1800)
+    showToast('Chave PIX copiada', 'ok')
   }
 
   if (missing) {
@@ -189,7 +190,7 @@ export default function PublicStore() {
       <header className="store-hero" style={heroStyle}>
         <div className="wrap stack">
           {store.avatar_url ? (
-            <img className="avatar" src={store.avatar_url} alt="" loading="lazy" />
+            <PImg className="avatar" src={store.avatar_url} alt="" />
           ) : (
             <div className="avatar">{store.name.slice(0, 1)}</div>
           )}
@@ -212,7 +213,6 @@ export default function PublicStore() {
               <button className="btn btn-gold" onClick={copyPix}>PIX {store.pix_key}</button>
             )}
           </div>
-          {copied && <span className="badge">{copied}</span>}
         </div>
       </header>
 
@@ -227,7 +227,7 @@ export default function PublicStore() {
         <div className="grid-3" style={{ marginTop: 12 }}>
           {visible.map((p) => (
             <article className="card product-card" key={p.id}>
-              {p.photo_url ? <img src={p.photo_url} alt={p.name} loading="lazy" /> : <div style={{ height: 180, background: '#eee' }} />}
+              {p.photo_url ? <PImg className="product-img" src={p.photo_url} alt={p.name} /> : <div className="product-img" style={{ background: '#eee' }} />}
               <div className="pad stack">
                 <strong>{p.name}</strong>
                 {p.description && <p className="tiny">{p.description}</p>}

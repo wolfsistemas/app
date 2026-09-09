@@ -4,6 +4,8 @@ import { useAuth } from '../lib/AuthContext.jsx'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import Brand from '../components/Brand.jsx'
 import PhotoInput from '../components/PhotoInput.jsx'
+import PImg from '../components/PImg.jsx'
+import { useToast } from '../components/Toast.jsx'
 import { cancelSubscription, createCheckout, createSubscription, syncSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
 
@@ -44,7 +46,7 @@ export default function Dashboard() {
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
   const [copiedLink, setCopiedLink] = useState(false)
-  const [toast, setToast] = useState('')
+  const showToast = useToast()
   const [billingBusy, setBillingBusy] = useState(false)
   const [subBusy, setSubBusy] = useState(false)
   const [mpSubAvailable, setMpSubAvailable] = useState(false)
@@ -109,8 +111,7 @@ export default function Dashboard() {
         addOrder(row)
         beep()
         const code = String(row.code || '').padStart(3, '0')
-        setToast(`Pedido nº ${code} · ${row.customer_name || 'Cliente'} · ${money(row.total)}`)
-        window.setTimeout(() => setToast(''), 7000)
+        showToast(`Pedido nº ${code} · ${row.customer_name || 'Cliente'} · ${money(row.total)}`, 'info', 7000)
       })
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -205,7 +206,7 @@ export default function Dashboard() {
     return { total, novos, count: orders.length }
   }, [orders])
 
-  async function persistStore(next) {
+  async function persistStore(next, okLabel = 'Dados salvos') {
     setError('')
     try {
       const saved = await saveStore({
@@ -214,7 +215,7 @@ export default function Dashboard() {
         whatsapp: onlyDigits(next.whatsapp ?? store.whatsapp)
       })
       setForm(saved)
-      setMsg('Salvo.')
+      showToast(okLabel, 'ok')
     } catch (err) {
       setError(err.message)
     }
@@ -257,7 +258,7 @@ export default function Dashboard() {
         sort: product.sort || products.length + 1
       })
       setProduct(null)
-      setMsg('Produto salvo.')
+      showToast('Produto salvo', 'ok')
     } catch (err) {
       setError(err.message)
     }
@@ -345,7 +346,7 @@ export default function Dashboard() {
                 value={form.avatar_url || ''}
                 onChange={(url) => setForm({ ...form, avatar_url: url })}
               />
-              <button className="btn btn-dark" onClick={() => persistStore(form)}>Salvar vitrine</button>
+              <button className="btn btn-dark" onClick={() => persistStore(form, 'Vitrine salva')}>Salvar vitrine</button>
             </div>
           </section>
         )}
@@ -414,7 +415,7 @@ export default function Dashboard() {
               <div className="grid-3">
                 {products.map((p) => (
                   <article className="card product-card" key={p.id}>
-                    {p.photo_url ? <img src={p.photo_url} alt={p.name} loading="lazy" /> : <div style={{ height: 120, background: '#eee' }} />}
+                    {p.photo_url ? <PImg className="product-img" src={p.photo_url} alt={p.name} /> : <div className="product-img" style={{ background: '#eee' }} />}
                     <div className="pad">
                       <strong>{p.name}</strong>
                       <div className="row">
@@ -477,9 +478,10 @@ export default function Dashboard() {
             <h3>Botões da bio</h3>
             <p>Aparecem acima da vitrine, no mesmo link.</p>
             {(form.links || []).map((link, idx) => (
-              <div className="grid-2" key={link.id}>
+              <div className="link-row" key={link.id}>
                 <input
                   value={link.label}
+                  placeholder="Rótulo (ex.: Instagram)"
                   onChange={(e) => {
                     const links = [...form.links]
                     links[idx] = { ...link, label: e.target.value }
@@ -488,12 +490,25 @@ export default function Dashboard() {
                 />
                 <input
                   value={link.url}
+                  placeholder="https://"
                   onChange={(e) => {
                     const links = [...form.links]
                     links[idx] = { ...link, url: e.target.value }
                     setForm({ ...form, links })
                   }}
                 />
+                <button
+                  type="button"
+                  className="btn-x"
+                  aria-label={`Remover botão ${link.label || idx + 1}`}
+                  title="Remover este botão"
+                  onClick={() => {
+                    const links = (form.links || []).filter((_, i) => i !== idx)
+                    setForm({ ...form, links })
+                  }}
+                >
+                  ×
+                </button>
               </div>
             ))}
             <div className="row">
@@ -503,7 +518,7 @@ export default function Dashboard() {
               >
                 Adicionar botão
               </button>
-              <button className="btn btn-dark" onClick={() => persistStore(form)}>Salvar links</button>
+              <button className="btn btn-dark" onClick={() => persistStore(form, 'Links salvos')}>Salvar links</button>
             </div>
           </section>
         )}
@@ -585,7 +600,6 @@ export default function Dashboard() {
           </section>
         )}
       </main>
-      {toast && <div className="toast" onClick={() => setToast('')}>{toast}</div>}
     </div>
   )
 }
