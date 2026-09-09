@@ -627,17 +627,26 @@ function isMpWebhook(e, body) {
   return false
 }
 
-function mpProcessed(id) {
+// Checa se o evento já foi processado com sucesso (dedupe). Ler não marca: só
+// mpMarkProcessed grava. Assim, se a ativação falhar (ex.: Supabase fora) o
+// evento NÃO fica marcado e o retry do MP reprocessa em vez de engolir.
+function mpIsProcessed(id) {
+  var list = []
+  try {
+    list = JSON.parse(props().getProperty('MP_PROCESSED') || '[]')
+  } catch (err) { list = [] }
+  return list.indexOf(id) !== -1
+}
+
+function mpMarkProcessed(id) {
   var KEY = 'MP_PROCESSED'
   var list = []
   try {
     list = JSON.parse(props().getProperty(KEY) || '[]')
   } catch (err) { list = [] }
-  if (list.indexOf(id) !== -1) return true
-  list.push(id)
+  if (list.indexOf(id) === -1) list.push(id)
   if (list.length > 80) list = list.slice(-80)
   props().setProperty(KEY, JSON.stringify(list))
-  return false
 }
 
 function mpFetch(path) {
@@ -675,16 +684,18 @@ function isNotFound(err) {
   return /404/.test(msg) || /not found/i.test(msg)
 }
 
-// Resolve a loja de um evento MP. Ordem: external_reference (avulso/1x) ->
-// preapproval_plan_id (assinatura hospedada) -> preapproval (se só tiver o id).
-// external_reference 'plan:<mpPlanId>' não vira store por prefixo: o plano do MP
-// tem id próprio; só dá para achar a loja via mp_plan_id no Supabase.
+// Resolve a loja de um evento MP. Ordem: external_reference (avulso/1x e
+// assinatura: gravamos 'plan:' + <store UUID> no plano e o MP ecoa esse valor
+// nas cobranças da assinatura) -> preapproval_plan_id -> preapproval.
 function resolveStoreForMp(ext, planId, preapprovalId) {
   var extStr = String(ext || '')
-  if (extStr.indexOf('plan:') !== 0) {
-    var storeId = resolveStoreFromOrderNsu(extStr)
-    if (storeId) return storeId
+  var storeId = ''
+  if (extStr.indexOf('plan:') === 0) {
+    storeId = extStr.slice(5)
+  } else {
+    storeId = resolveStoreFromOrderNsu(extStr)
   }
+  if (storeId) return storeId
   if (planId) storeId = findStoreIdByPlanId(String(planId))
   if (!storeId && preapprovalId) {
     try {
@@ -697,7 +708,7 @@ function resolveStoreForMp(ext, planId, preapprovalId) {
 
 // Cobrança pontual aprovada (1x ou mensalidade da assinatura): ativa/renova +30d.
 function handleMpApprovedPayment(paymentId, payment) {
-  if (mpProcessed('pay:' + paymentId)) {
+  if (mpIsProcessed('pay:' + paymentId)) {
     return { success: true, message: null, already: true }
   }
   var orderNsu = String(payment.external_reference || '')
@@ -713,6 +724,7 @@ function handleMpApprovedPayment(paymentId, payment) {
   var capture = payment.payment_method_id || payment.payment_type_id || '-'
   var receipt = (payment.transaction_details && payment.transaction_details.external_resource_url) || ''
   confirmPlan(storeId, orderNsu, { payment_id: paymentId }, capture, amount, receipt)
+  mpMarkProcessed('pay:' + paymentId)
   return { success: true, message: null }
 }
 
@@ -760,7 +772,7 @@ function handleMpPreapprovalWebhook(subId) {
     return { success: true, message: null, status: status }
   }
   if (status === 'authorized') {
-    if (mpProcessed('sub:' + subId)) {
+    if (mpIsProcessed('sub:' + subId)) {
       return { success: true, message: null, already: true }
     }
     // 1ª cobrança paga: ativa o plano e guarda o vínculo loja <-> subscription.
@@ -778,6 +790,7 @@ function handleMpPreapprovalWebhook(subId) {
         'Status: ' + status + '\n' +
         'Validade: ' + row.plan_expires_at
     )
+    mpMarkProcessed('sub:' + subId)
   }
   return { success: true, message: null, status: status }
 }
