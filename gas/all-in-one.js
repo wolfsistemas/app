@@ -20,6 +20,7 @@
  *   IMGBB_API_KEY           chave ImgBB
  *   UPLOAD_TOKEN            token opcional de upload (igual ao VITE_UPLOAD_TOKEN)
  *   INFINITEPAY_HANDLE      sua InfiniteTag (ex.: maiconvss, sem o $)
+ *   EMAIL_LOG               e-mail que recebe os logs (padrão: wolfsaasbr@gmail.com)
  *
  * Deploy: New deployment > Web app > Execute as: Me / Who has access: Anyone.
  * O webhook do pagamento aponta para a própria URL deste Web App (o GAS usa
@@ -28,6 +29,7 @@
 
 var PLAN_DAYS = 30
 var INFINITEPAY_API = 'https://api.checkout.infinitepay.io/links'
+var DEFAULT_LOG_EMAIL = 'wolfsaasbr@gmail.com'
 
 function jsonOut(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON)
@@ -37,15 +39,51 @@ function props() {
   return PropertiesService.getScriptProperties()
 }
 
+/* ---------------- LOG por e-mail ---------------- */
+
+function notify(subject, body) {
+  try {
+    var email = props().getProperty('EMAIL_LOG') || DEFAULT_LOG_EMAIL
+    MailApp.sendEmail(email, '[VitrineZap] ' + subject, String(body).slice(0, 3000))
+  } catch (err) {
+    console.log('Falha ao enviar e-mail de log: ' + err)
+  }
+}
+
+function safeLog(obj) {
+  try {
+    console.log(JSON.stringify(obj))
+  } catch (err) {
+    console.log('Erro ao gerar log: ' + err)
+  }
+}
+
+/* ---------------- Parse defensivo ---------------- */
+
+function parseQueryString(qs) {
+  var out = {}
+  if (!qs) return out
+  qs.split('&').forEach(function (pair) {
+    var i = pair.indexOf('=')
+    if (i < 0) return
+    var key = decodeURIComponent(pair.slice(0, i))
+    var val = decodeURIComponent(pair.slice(i + 1))
+    out[key] = val
+  })
+  return out
+}
+
 function parseBody(e) {
-  var raw = (e.postData && e.postData.contents) || '{}'
+  var raw = (e.postData && e.postData.contents) || ''
   var body = {}
   try {
     body = JSON.parse(raw)
   } catch (err) {
-    body = {}
+    // Se não for JSON, tenta como formulário (por garantia)
+    body = parseQueryString(raw)
+    body.__parsed_as = 'query'
   }
-  body.__raw = raw
+  body.__raw = String(raw).slice(0, 2000)
   return body
 }
 
@@ -53,11 +91,11 @@ function parseBody(e) {
 
 function handleUpload(body) {
   var key = props().getProperty('IMGBB_API_KEY')
-  if (!key) return { error: 'IMGBB_API_KEY ausente' }
+  if (!key) return { ok: false, error: 'IMGBB_API_KEY ausente' }
 
   var token = props().getProperty('UPLOAD_TOKEN')
-  if (token && body.token !== token) return { error: 'Não autorizado' }
-  if (!body.image) return { error: 'Imagem ausente' }
+  if (token && body.token !== token) return { ok: false, error: 'Não autorizado' }
+  if (!body.image) return { ok: false, error: 'Imagem ausente' }
 
   var payload = {
     key: key,
@@ -72,19 +110,18 @@ function handleUpload(body) {
   var parsed = JSON.parse(res.getContentText() || '{}')
   var url = parsed.data && (parsed.data.display_url || parsed.data.url)
   if (!url) {
-    return { error: (parsed.error && parsed.error.message) || 'ImgBB recusou o upload' }
+    return { ok: false, error: (parsed.error && parsed.error.message) || 'ImgBB recusou o upload' }
   }
-  return {
-    url: url,
-    thumb: parsed.data.thumb && parsed.data.thumb.url
-  }
+  return { ok: true, url: url, thumb: parsed.data.thumb && parsed.data.thumb.url }
 }
 
 /* ---------------- CHECKOUT InfinitePay ---------------- */
 
 function handleCheckout(body) {
   var handle = props().getProperty('INFINITEPAY_HANDLE')
-  if (!handle) return { ok: false, error: 'INFINITEPAY_HANDLE ausente no GAS' }
+  if (!handle) {
+    return { ok: false, error: 'INFINITEPAY_HANDLE ausente no GAS' }
+  }
 
   var storeId = String(body.store_id || '')
   if (!storeId) return { ok: false, error: 'store_id ausente' }
@@ -132,38 +169,46 @@ function handleCheckout(body) {
     parsed.checkout_url ||
     (parsed.data && (parsed.data.url || parsed.data.checkout_url))
   if (res.getResponseCode() >= 300 || !checkoutUrl) {
+    notify('Falha ao gerar checkout (loja ' + storeId + ')', text)
     return {
       ok: false,
       error: parsed.message || parsed.error || 'InfinitePay recusou',
-      status: res.getResponseCode(),
-      detail: text
+      status: res.getResponseCode()
     }
   }
-  return { ok: true, url: checkoutUrl }
+  return { ok: true, url: checkoutUrl, order_nsu: orderNsu }
 }
 
-/* ---------------- WEBHOOK de pagamento ---------------- */
+/* ---------------- ATIVAÇÃO do plano ---------------- */
 
-function extractStoreId(body) {
-  var obj = body.data || body.object || body
-  var candidates = [
-    obj.store_id,
-    obj.reference_id,
-    obj.client_id,
-    obj.client && obj.client.id,
-    body.store_id,
-    body.reference_id,
-    body.client_id,
-    body.metadata && body.metadata.store_id
-  ]
-  for (var i = 0; i < candidates.length; i++) {
-    var v = candidates[i]
-    if (typeof v === 'string' && v && v.indexOf('store_') !== -1) return v
+function restHeaders(serviceKey) {
+  return {
+    apikey: serviceKey,
+    Authorization: 'Bearer ' + serviceKey
   }
-  for (var j = 0; j < candidates.length; j++) {
-    if (typeof candidates[j] === 'string' && candidates[j]) return candidates[j]
+}
+
+function fetchStore(storeId) {
+  var p = props()
+  var url = p.getProperty('SUPABASE_URL')
+  var serviceKey = p.getProperty('SUPABASE_SERVICE_ROLE')
+  if (!url || !serviceKey) {
+    throw new Error('SUPABASE_URL/SERVICE_ROLE ausentes no GAS')
   }
-  return ''
+  var res = UrlFetchApp.fetch(
+    url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId) + '&select=id,slug,plan,plan_expires_at,name',
+    {
+      method: 'get',
+      headers: restHeaders(serviceKey),
+      muteHttpExceptions: true
+    }
+  )
+  var text = res.getContentText()
+  if (res.getResponseCode() >= 300) {
+    throw new Error('GET stores falhou (' + res.getResponseCode() + '): ' + text.slice(0, 300))
+  }
+  var rows = JSON.parse(text || '[]')
+  return rows && rows.length ? rows[0] : null
 }
 
 function activatePlan(storeId) {
@@ -171,7 +216,7 @@ function activatePlan(storeId) {
   var url = p.getProperty('SUPABASE_URL')
   var serviceKey = p.getProperty('SUPABASE_SERVICE_ROLE')
   if (!url || !serviceKey) {
-    return { ok: false, error: 'SUPABASE_URL/SERVICE_ROLE ausentes' }
+    throw new Error('SUPABASE_URL/SERVICE_ROLE ausentes no GAS')
   }
   var expires = new Date(Date.now() + PLAN_DAYS * 86400000).toISOString()
   var res = UrlFetchApp.fetch(url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId), {
@@ -184,32 +229,60 @@ function activatePlan(storeId) {
     },
     payload: JSON.stringify({
       plan: 'pro',
-      plan_expires_at: expires,
-      updated_at: new Date().toISOString()
+      plan_expires_at: expires
     }),
     muteHttpExceptions: true
   })
-  return { ok: res.getResponseCode() < 300, status: res.getResponseCode() }
+  var code = res.getResponseCode()
+  if (code >= 300) {
+    var text = res.getContentText()
+    throw new Error('PATCH stores falhou (' + code + '): ' + text.slice(0, 500))
+  }
+  return expires
 }
+
+function resolveStoreFromOrderNsu(orderNsu) {
+  var s = String(orderNsu || '')
+  if (s.indexOf(':') > 0) return s.split(':')[0]
+  return s
+}
+
+/* ---------------- WEBHOOK de pagamento ---------------- */
 
 function handleWebhook(body) {
   // Payload real da InfinitePay (sem evento/status no corpo):
   // { invoice_slug, amount, paid_amount, installments, capture_method,
   //   transaction_nsu, order_nsu, receipt_url, items }
-  // A InfinitePay chama o webhook quando a venda é confirmada.
-  var storeId = ''
   var orderNsu = String(body.order_nsu || '')
-  if (orderNsu.indexOf(':') > 0) {
-    storeId = orderNsu.split(':')[0]
-  }
-  if (!storeId) storeId = extractStoreId(body)
+  var storeId = resolveStoreFromOrderNsu(orderNsu) || String(body.store_id || '')
+
   if (!storeId) {
-    return { success: false, message: 'Loja não identificada no webhook' }
+    notify('Webhook sem loja identificada', JSON.stringify(body, null, 2))
+    throw new Error('Loja não identificada no webhook')
   }
-  var result = activatePlan(storeId)
-  if (!result.ok) {
-    return { success: false, message: 'Falha ao ativar o plano' }
+
+  // Ativa e confirma com uma nova leitura (se falhar, lança 500 -> InfinitePay reenvia)
+  var expires = activatePlan(storeId)
+  var row = fetchStore(storeId)
+  if (!row || row.plan !== 'pro') {
+    var dump = 'order_nsu=' + orderNsu + '\nstoreId=' + storeId + '\nrow=' + JSON.stringify(row)
+    notify('ATENÇÃO: plano não confirmado como pro', dump)
+    throw new Error('Plano não confirmado como pro')
   }
+
+  notify(
+    'Pagamento recebido - plano ativado',
+    'Venda efetuada e paga!\n\n' +
+      'Loja: ' + (row.name || row.slug || row.id) + '\n' +
+      'Plano: Loja\n' +
+      'Validade: ' + row.plan_expires_at + '\n' +
+      'order_nsu: ' + orderNsu + '\n' +
+      'transaction_nsu: ' + (body.transaction_nsu || '-') + '\n' +
+      'capture_method: ' + (body.capture_method || '-') + '\n' +
+      'amount: ' + (body.amount || '-') + '\n' +
+      'receipt_url: ' + (body.receipt_url || '-')
+  )
+
   return { success: true, message: null }
 }
 
@@ -217,16 +290,37 @@ function handleWebhook(body) {
 
 function doPost(e) {
   var body = parseBody(e)
-  var result
-
-  if (body.action === 'checkout') {
-    result = handleCheckout(body)
-  } else if (body.action === 'upload' || body.image) {
-    result = handleUpload(body)
-  } else {
-    result = handleWebhook(body)
+  var log = {
+    at: new Date().toISOString(),
+    action: 'desconhecida',
+    keys: Object.keys(body).slice(0, 25)
   }
-  return jsonOut(result)
+  try {
+    var result
+    if (body.action === 'checkout') {
+      log.action = 'checkout'
+      result = handleCheckout(body)
+    } else if (body.action === 'upload' || body.image) {
+      log.action = 'upload'
+      result = handleUpload(body)
+    } else {
+      log.action = 'webhook'
+      result = handleWebhook(body)
+    }
+    log.result = result
+    safeLog(log)
+
+    if (result && result.ok === false && log.action !== 'upload') {
+      notify('Falha em ' + log.action, JSON.stringify(log, null, 2))
+    }
+    return jsonOut(result)
+  } catch (err) {
+    log.error = String((err && err.stack) || err)
+    safeLog(log)
+    notify('Erro em ' + log.action + ' - ' + String((err && err.message) || err), JSON.stringify(log, null, 2))
+    // HTTP 500 (erro real no Apps Script) -> InfinitePay tenta reenviar o webhook
+    throw err
+  }
 }
 
 function doGet() {

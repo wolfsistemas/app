@@ -8,16 +8,19 @@
  *   1. App chama POST { action: "checkout", store_id, email, name, redirect_url }
  *   2. Este GAS chama a InfinitePay (POST /links) e devolve { url }.
  *   3. Ao confirmar o pagamento, a InfinitePay chama a própria URL deste Web App;
- *      o GAS ativa a loja (plan=pro, plan_expires_at=+30d) via Supabase REST.
+ *      o GAS ativa a loja (plan=pro, plan_expires_at=+30d) via Supabase REST e
+ *      CONFIRMA com uma nova leitura antes de responder success.
  *
  * Configuração (Project Settings > Script properties):
  *   SUPABASE_URL            https://xxxx.supabase.co
  *   SUPABASE_SERVICE_ROLE   service_role
  *   INFINITEPAY_HANDLE      sua InfiniteTag (ex.: maiconvss, sem $)
+ *   EMAIL_LOG               e-mail dos logs (padrão: wolfsaasbr@gmail.com)
  */
 
 var PLAN_DAYS = 30
 var INFINITEPAY_API = 'https://api.checkout.infinitepay.io/links'
+var DEFAULT_LOG_EMAIL = 'wolfsaasbr@gmail.com'
 
 function jsonOut(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON)
@@ -27,8 +30,17 @@ function props() {
   return PropertiesService.getScriptProperties()
 }
 
+function notify(subject, body) {
+  try {
+    var email = props().getProperty('EMAIL_LOG') || DEFAULT_LOG_EMAIL
+    MailApp.sendEmail(email, '[VitrineZap] ' + subject, String(body).slice(0, 3000))
+  } catch (err) {
+    console.log('Falha ao enviar e-mail de log: ' + err)
+  }
+}
+
 function parseBody(e) {
-  var raw = (e.postData && e.postData.contents) || '{}'
+  var raw = (e.postData && e.postData.contents) || ''
   try {
     return JSON.parse(raw)
   } catch (err) {
@@ -80,57 +92,96 @@ function handleCheckout(body) {
 
   var checkoutUrl = parsed.url || (parsed.data && parsed.data.url)
   if (res.getResponseCode() >= 300 || !checkoutUrl) {
+    notify('Falha ao gerar checkout (loja ' + storeId + ')', text)
     return {
       ok: false,
       error: parsed.message || parsed.error || 'InfinitePay recusou',
       status: res.getResponseCode()
     }
   }
-  return { ok: true, url: checkoutUrl }
+  return { ok: true, url: checkoutUrl, order_nsu: orderNsu }
+}
+
+function fetchStore(storeId) {
+  var p = props()
+  var serviceKey = p.getProperty('SUPABASE_SERVICE_ROLE')
+  var res = UrlFetchApp.fetch(
+    p.getProperty('SUPABASE_URL') +
+      '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId) +
+      '&select=id,slug,plan,plan_expires_at,name',
+    {
+      method: 'get',
+      headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey },
+      muteHttpExceptions: true
+    }
+  )
+  if (res.getResponseCode() >= 300) throw new Error('GET stores falhou')
+  var rows = JSON.parse(res.getContentText() || '[]')
+  return rows && rows.length ? rows[0] : null
 }
 
 function activatePlan(storeId) {
   var p = props()
-  var url = p.getProperty('SUPABASE_URL')
   var serviceKey = p.getProperty('SUPABASE_SERVICE_ROLE')
-  if (!url || !serviceKey) return { ok: false }
   var expires = new Date(Date.now() + PLAN_DAYS * 86400000).toISOString()
-  var res = UrlFetchApp.fetch(url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId), {
-    method: 'patch',
-    contentType: 'application/json',
-    headers: {
-      apikey: serviceKey,
-      Authorization: 'Bearer ' + serviceKey,
-      Prefer: 'return=minimal'
-    },
-    payload: JSON.stringify({
-      plan: 'pro',
-      plan_expires_at: expires,
-      updated_at: new Date().toISOString()
-    }),
-    muteHttpExceptions: true
-  })
-  return { ok: res.getResponseCode() < 300 }
+  var res = UrlFetchApp.fetch(
+    p.getProperty('SUPABASE_URL') + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId),
+    {
+      method: 'patch',
+      contentType: 'application/json',
+      headers: {
+        apikey: serviceKey,
+        Authorization: 'Bearer ' + serviceKey,
+        Prefer: 'return=minimal'
+      },
+      payload: JSON.stringify({
+        plan: 'pro',
+        plan_expires_at: expires
+      }),
+      muteHttpExceptions: true
+    }
+  )
+  if (res.getResponseCode() >= 300) {
+    throw new Error('PATCH stores falhou (' + res.getResponseCode() + '): ' + res.getContentText().slice(0, 300))
+  }
+  return expires
 }
 
 function doPost(e) {
   var body = parseBody(e)
-  if (body.action === 'checkout') {
-    return jsonOut(handleCheckout(body))
+  try {
+    if (body.action === 'checkout') {
+      return jsonOut(handleCheckout(body))
+    }
+    // Webhook: venda confirmada pela InfinitePay.
+    var orderNsu = String(body.order_nsu || '')
+    var storeId = (orderNsu.indexOf(':') > 0 ? orderNsu.split(':')[0] : orderNsu) || String(body.store_id || '')
+    if (!storeId) {
+      notify('Webhook sem loja identificada', JSON.stringify(body))
+      throw new Error('Loja não identificada no webhook')
+    }
+    activatePlan(storeId)
+    var row = fetchStore(storeId)
+    if (!row || row.plan !== 'pro') {
+      notify('ATENÇÃO: plano não confirmado como pro', JSON.stringify(body))
+      throw new Error('Plano não confirmado como pro')
+    }
+    notify(
+      'Pagamento recebido - plano ativado',
+      'Venda efetuada e paga!\nLoja: ' + (row.name || row.slug || row.id) +
+        '\nValidade: ' + row.plan_expires_at +
+        '\norder_nsu: ' + orderNsu +
+        '\ntransaction_nsu: ' + (body.transaction_nsu || '-') +
+        '\ncapture_method: ' + (body.capture_method || '-') +
+        '\namount: ' + (body.amount || '-') +
+        '\nreceipt_url: ' + (body.receipt_url || '-')
+    )
+    return jsonOut({ success: true, message: null })
+  } catch (err) {
+    notify('Erro no webhook - ' + String((err && err.message) || err), JSON.stringify(body))
+    // HTTP 500 -> InfinitePay reenvia
+    throw err
   }
-  // Webhook: a InfinitePay avisa quando a venda foi confirmada.
-  var storeId = ''
-  var orderNsu = String(body.order_nsu || '')
-  if (orderNsu.indexOf(':') > 0) storeId = orderNsu.split(':')[0]
-  if (!storeId) storeId = String(body.store_id || '')
-  if (!storeId) {
-    return jsonOut({ success: false, message: 'Loja não identificada no webhook' })
-  }
-  var result = activatePlan(storeId)
-  return jsonOut({
-    success: result.ok,
-    message: result.ok ? null : 'Falha ao ativar o plano'
-  })
 }
 
 function doGet() {
