@@ -43,6 +43,7 @@ export async function createSubscription({ storeId, email, name, cardToken }) {
     email: email || '',
     name: name || '',
     card_token: cardToken,
+    mp_public_key: mpPublicKey,
     redirect_url: redirectUrl
   })
 }

@@ -73,7 +73,12 @@ export default function MPBrickModal({ open, onClose, storeId, email, name, onSu
                   })
                   .catch((err) => {
                     if (dead) return
-                    setErrMsg(err.message || 'Não foi possível confirmar a assinatura.')
+                    const msg = err.message || ''
+                    setErrMsg(
+                      /used|consumido|já foi usado|Ambientes diferentes/i.test(msg)
+                        ? `${msg} Basta clicar em pagar de novo — o formulário gera um token novo a cada tentativa.`
+                        : msg
+                    )
                     setPhase('form')
                     reject(err)
                   })

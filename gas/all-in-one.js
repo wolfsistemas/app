@@ -21,10 +21,16 @@
  *   PAYMENT_PROVIDER = mp           (Mercado Pago, Checkout Pro)
  *
  * ASSINATURA RECORRENTE (provider mp):
- *   O front tokeniza o cartão com o CardPayment Brick e envia o card_token.
- *   Aqui criamos um preapproval (status "authorized") que cobra R$ 9,90/mês
- *   automaticamente. O plano é ativado na criação (cartão já validado pelo MP)
- *   e renovado +30d a cada cobrança recorrente (webhook de pagamento).
+ *   O front tokeniza o cartão com o CardPayment Brick e envia o card_token
+ *   (de USO ÚNICO: gere um novo a cada tentativa). Aqui criamos um preapproval
+ *   (status "authorized") que cobra R$ 9,90/mês automaticamente. O plano é
+ *   ativado na criação (cartão já validado pelo MP) e renovado +30d a cada
+ *   cobrança recorrente (webhook de pagamento).
+ *
+ *   IMPORTANTE (sandbox): a chave pública do front (VITE_MP_PUBLIC_KEY) e o
+ *   MP_ACCESS_TOKEN do GAS precisam ser do MESMO ambiente — TEST- nos dois para
+ *   testar sem pagar, APP_USR- nos dois em produção. Misturar ambientes gera
+ *   "Resource not found". O GAS valida isso quando o front envia a chave pública.
  *
  * Configuração (Project Settings > Script properties):
  *   SUPABASE_URL            https://xxxx.supabase.co
@@ -301,6 +307,21 @@ function handleSubscribeMp(body) {
   if (!cardToken) return { ok: false, error: 'card_token ausente (tokenize o cartão no front)' }
   if (!email) return { ok: false, error: 'e-mail do assinante ausente' }
 
+  // O card_token é criado no front com a CHAVE PÚBLICA. Se a chave pública e o
+  // access token forem de ambientes diferentes (TEST- x APP_USR-), o MP não
+  // encontra o token -> "Resource not found". Valida antes de chamar a API.
+  var pubEnv = String(body.mp_public_key || '').split('-')[0] // 'TEST' | 'APP_USR'
+  var tokEnv = String(token).split('-')[0]
+  if (pubEnv && tokEnv && pubEnv !== tokEnv) {
+    return {
+      ok: false,
+      error:
+        'Ambientes diferentes: o front usa chave ' + pubEnv +
+        ' e o GAS usa token ' + tokEnv +
+        '. No sandbox use TEST- nos dois; em produção, APP_USR- nos dois.'
+    }
+  }
+
   var priceCents = Number(body.price_cents || body.amount_cents || 990)
   var unitPrice = priceCents / 100 // MP usa reais (float)
   var external = 'sub:' + storeId + ':' + Date.now()
@@ -323,24 +344,35 @@ function handleSubscribeMp(body) {
   }
 
   // Alguns parâmetros (ex.: notification_url) podem ser rejeitados conforme a conta.
-  // Se der 4xx, tenta UMA vez sem esse campo antes de devolver o erro.
+  // O card_token é de USO ÚNICO: só tentamos de novo SEM notification_url quando a
+  // própria resposta acusar esse campo. Para qualquer outro 4xx não há retry, senão
+  // reusamos o token e o MP devolve "Card token was used, please generate new".
   var res = mpCreatePreapproval(token, payload)
-  if (res.code >= 300 && res.code < 500 && payload.notification_url) {
+  var text = res.text
+  if (
+    res.code >= 300 && res.code < 500 &&
+    payload.notification_url &&
+    /notification[_\s]?url/i.test(text)
+  ) {
     var fallback = JSON.parse(JSON.stringify(payload))
     delete fallback.notification_url
     res = mpCreatePreapproval(token, fallback)
+    text = res.text
   }
-  var text = res.text
   var parsed = {}
   try {
     parsed = JSON.parse(text)
   } catch (err) { /* resposta não-JSON */ }
 
   if (res.code >= 300 || !parsed.id) {
+    var errMsg = parsed.message || parsed.error || 'Mercado Pago recusou a assinatura'
+    if (/card token was used|already been used|used, please generate|j[aá] foi usado|consumido/i.test(String(errMsg))) {
+      errMsg = 'Este token de cartão já foi usado. Feche e reabra o formulário para gerar um novo token e tente novamente.'
+    }
     notify('Falha ao criar assinatura MP (loja ' + storeId + ')', text)
     return {
       ok: false,
-      error: parsed.message || parsed.error || 'Mercado Pago recusou a assinatura',
+      error: errMsg,
       status: res.code
     }
   }

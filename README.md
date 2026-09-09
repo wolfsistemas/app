@@ -76,6 +76,8 @@ Com o provedor em `mp`, o painel oferece **"Assinar com cartão · R$ 9,90/mês"
 2. **Supabase**: rode `supabase/up_subscriptions.sql` (adiciona `mp_subscription_id` e `mp_subscription_status` na `stores`).
 3. **Front**: preencha `VITE_MP_PUBLIC_KEY` (chave **pública** do Mercado Pago, de Suas integrações > sua aplicação) no `.env.production` e faça o build/CI. Sem essa chave, o botão de assinatura fica oculto e só aparece o pagamento avulso.
 
+Para testar **sem pagar** (sandbox): a chave pública (`VITE_MP_PUBLIC_KEY`) e o `MP_ACCESS_TOKEN` do GAS precisam ser do **mesmo ambiente**. No sandbox use `TEST-...` nas duas pontas e `MP_USE_SANDBOX=true` no GAS; em produção use `APP_USR-...` nas duas. Misturar `TEST-` com `APP_USR-` gera erro **"Resource not found"**. O `card_token` é de uso único — a cada tentativa o formulário do Brick gera um novo; nunca reutilize o mesmo token (o MP responde "Card token was used").
+
 Como funciona:
 
 - O front abre um modal com o **CardPayment Brick** (cartão nunca passa pelo seu servidor; o Mercado Pago tokeniza).
