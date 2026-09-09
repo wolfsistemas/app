@@ -24,7 +24,7 @@ Sem VPS. O browser fala direto com o Supabase.
 - Painel: produtos, pedidos (tempo real com som), tema, PIX, plano
 - Limite de 8 produtos no plano grátis
 - Marca VitrineZap no rodapé do plano free (removida no Loja)
-- Checkout avulso via link (InfinitePay / Mercado Pago) + **assinatura recorrente no cartão (Mercado Pago, cancele quando quiser)**
+- Checkout avulso via link (InfinitePay / Mercado Pago) + **assinatura mensal recorrente (Mercado Pago hospedado com plano, cancele quando quiser)**
 
 ## Como rodar
 
@@ -39,7 +39,7 @@ Sem `.env`, o app usa **modo local** (dados no navegador + loja demo).
 
 1. Crie um projeto no Supabase.
 2. No SQL Editor, rode nesta ordem: `supabase/schema.sql`, `supabase/rls.sql`, `supabase/storage.sql`.
-3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql`.
+3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`.
 4. Em Authentication > Providers, deixe e-mail/senha ligado. Para testar rápido, desligue **Confirm email**.
 5. Em Authentication > URL configuration: Site URL e Redirect URLs apontando para o endereço do app (`https://wolfsistemas.github.io/app/**`).
 6. Copie `.env.example` para `.env` e preencha URL + anon key.
@@ -68,24 +68,26 @@ No GAS, mude a property `PAYMENT_PROVIDER` (e crie nova versão do deploy):
 - `infinitepay` (padrão) — usa `INFINITEPAY_HANDLE` (sua InfiniteTag, ex.: `maiconvss`, sem o `$`)
 - `mp` — usa `MP_ACCESS_TOKEN` (Access Token do Mercado Pago); opcional `MP_USE_SANDBOX=true` para testar em sandbox
 
-### Assinatura recorrente no cartão (Mercado Pago)
+### Assinatura recorrente no cartão (Mercado Pago) — modelo HOSPEDADO com plano
 
-Com o provedor em `mp`, o painel oferece **"Assinar com cartão · R$ 9,90/mês"**: cobrança mensal automática, sem fidelidade (cancele quando quiser). Passos:
+Com o provedor em `mp`, o painel oferece **"Assinar · R$ 9,90/mês"**: cobrança mensal automática, sem fidelidade (cancele quando quiser). Usamos o modelo **"com plano associado"**: o GAS cria um `preapproval_plan` por loja e redireciona para a **página do Mercado Pago** (`init_point`), onde o comprador paga a 1ª cobrança. Isso destrava o sandbox: o MP não exige pareamento comprador/cobrador no servidor e dá para testar com usuário/cartão de teste sem gastar.
+
+Passos:
 
 1. **GAS**: cole o novo `gas/all-in-one.js`, publique "Nova versão" e defina `PAYMENT_PROVIDER=mp` + `MP_ACCESS_TOKEN`.
-2. **Supabase**: rode `supabase/up_subscriptions.sql` (adiciona `mp_subscription_id` e `mp_subscription_status` na `stores`).
-3. **Front**: preencha `VITE_MP_PUBLIC_KEY` (chave **pública** do Mercado Pago, de Suas integrações > sua aplicação) no `.env.production` e faça o build/CI. Sem essa chave, o botão de assinatura fica oculto e só aparece o pagamento avulso.
+2. **Supabase**: rode `supabase/up_subscriptions.sql` e depois `supabase/up_mp_plans.sql` (adicionam `mp_subscription_id`, `mp_subscription_status` e `mp_plan_id` na `stores`).
+3. **Front**: basta `VITE_BILLING_URL` apontando para o GAS. **Não existe mais `VITE_MP_PUBLIC_KEY`** (não usamos Brick/tokenização no front — o checkout é a página hospedada do MP, e a chave pública ficou sem uso e foi removida dos `.env`).
 
-Para testar **sem pagar** (sandbox): a chave pública (`VITE_MP_PUBLIC_KEY`) e o `MP_ACCESS_TOKEN` do GAS precisam ser do **mesmo ambiente**. No sandbox use `TEST-...` nas duas pontas e `MP_USE_SANDBOX=true` no GAS; em produção use `APP_USR-...` nas duas. Misturar `TEST-` com `APP_USR-` gera erro **"Resource not found"**. O `card_token` é de uso único — a cada tentativa o formulário do Brick gera um novo; nunca reutilize o mesmo token (o MP responde "Card token was used").
+Para testar **sem pagar** (sandbox): defina `MP_USE_SANDBOX=true` no GAS com um `MP_ACCESS_TOKEN` **TEST-...** e abra o link de assinatura; entre na conta do **usuário de teste** que aparece na própria tela de credenciais do MP (bloco "Dados das credenciais de teste" — usuário `TESTUSER...` + senha) e pague com **cartão de teste**. Em produção use `MP_ACCESS_TOKEN` **APP_USR-...** (sem `MP_USE_SANDBOX`).
 
 Como funciona:
 
-- O front abre um modal com o **CardPayment Brick** (cartão nunca passa pelo seu servidor; o Mercado Pago tokeniza).
-- O GAS cria um `preapproval` (status `authorized`) com cobrança mensal de R$ 9,90. O plano é ativado na criação (cartão já validado pelo MP).
-- A cada mensalidade paga, o webhook renova `plan_expires_at` por +30 dias. Eventos de `preapproval` (cancelado/pausado) só atualizam o status — **o acesso continua até a data já paga**.
+- O front pede "assinar" e o GAS cria/pega o plano da loja (`POST /preapproval_plan`, **sem** `card_token_id`/`payer_email`) e devolve o `init_point`.
+- O comprador paga a 1ª cobrança na página do Mercado Pago. Quando o MP cria a assinatura, o webhook `subscription_preapproval` (status `authorized`) ativa o plano +30 dias e grava o vínculo loja <-> assinatura via `preapproval_plan_id` ↔ `mp_plan_id`.
+- A cada mensalidade paga, `subscription_authorized_payment`/`payment` renova `plan_expires_at` por +30 dias. Eventos de assinatura cancelada/pausada só atualizam o status — **o acesso continua até a data já paga**.
 - No painel, quem assinou vê "Cancelar assinatura recorrente" (PUT `/preapproval/{id}`).
 
-Observação: recorrência automática exige **cartão**. O pagamento avulso via link (Pix/cartão) continua disponível como alternativa.
+Observação: recorrência automática exige **cartão** (a 1ª cobrança pode ser no cartão; Pix avulso continua como alternativa de 30 dias).
 
 Properties comuns: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `EMAIL_LOG` (padrão: wolfsaasbr@gmail.com).
 

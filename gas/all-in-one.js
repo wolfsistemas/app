@@ -11,7 +11,7 @@
  *
  * Roteamento automático:
  *   POST { action: "checkout", ... }         -> link de pagamento avulso (1x)
- *   POST { action: "subscribe", ... }        -> assinatura recorrente MP (cartão)
+ *   POST { action: "subscribe", ... }        -> assinatura mensal MP HOSPEDADA (plano + init_point)
  *   POST { action: "cancel_subscription" }   -> cancela a assinatura MP da loja
  *   POST { image, ... }                      -> upload ImgBB
  *   POST evento de pagamento                 -> ativa/renova o plano no Supabase
@@ -20,17 +20,19 @@
  *   PAYMENT_PROVIDER = infinitepay  (padrão atual, InfinitePay)
  *   PAYMENT_PROVIDER = mp           (Mercado Pago, Checkout Pro)
  *
- * ASSINATURA RECORRENTE (provider mp):
- *   O front tokeniza o cartão com o CardPayment Brick e envia o card_token
- *   (de USO ÚNICO: gere um novo a cada tentativa). Aqui criamos um preapproval
- *   (status "authorized") que cobra R$ 9,90/mês automaticamente. O plano é
- *   ativado na criação (cartão já validado pelo MP) e renovado +30d a cada
- *   cobrança recorrente (webhook de pagamento).
+ * ASSINATURA RECORRENTE MP — MODELO HOSPEDADO COM PLANO (sandbox-friendly):
+ *   O front NÃO tokeniza cartão. Aqui criamos um "preapproval_plan" por loja
+ *   (POST /preapproval_plan, SEM card_token_id e SEM payer_email) e devolvemos
+ *   o init_point: a 1ª cobrança acontece na PÁGINA DO MERCADO PAGO. No sandbox o
+ *   comprador entra como usuário de teste e paga com cartão de teste — sem gastar
+ *   e sem o erro "Both payer and collector must be real or test users", que era o
+ *   que travava o modelo anterior (preapproval server-side com card_token).
  *
- *   IMPORTANTE (sandbox): a chave pública do front (VITE_MP_PUBLIC_KEY) e o
- *   MP_ACCESS_TOKEN do GAS precisam ser do MESMO ambiente — TEST- nos dois para
- *   testar sem pagar, APP_USR- nos dois em produção. Misturar ambientes gera
- *   "Resource not found". O GAS valida isso quando o front envia a chave pública.
+ *   O vínculo loja <-> assinatura usa o mp_plan_id (gravado na loja): quando o MP
+ *   cria a assinatura, o webhook traz o preapproval_plan_id e o GAS localiza a
+ *   loja por mp_plan_id. A ativação do plano acontece quando a 1ª cobrança é
+ *   aprovada (webhook payment/subscription_authorized_payment/subscription_preapproval
+ *   com status authorized).
  *
  * Configuração (Project Settings > Script properties):
  *   SUPABASE_URL            https://xxxx.supabase.co
@@ -41,8 +43,7 @@
  *   PAYMENT_PROVIDER        infinitepay | mp
  *   INFINITEPAY_HANDLE      sua InfiniteTag (ex.: maiconvss, sem o $)  [provider infinitepay]
  *   MP_ACCESS_TOKEN         Access Token do Mercado Pago               [provider mp]
- *   MP_USE_SANDBOX          true para usar sandbox_init_point          [provider mp, opcional]
- *   MP_PUBLIC_KEY           chave pública do MP (vai no .env do front, NÃO aqui) — veja README
+ *   MP_USE_SANDBOX          true -> usa sandbox_init_point / página de teste  [provider mp, opcional]
  *
  *   EMAIL_LOG               e-mail que recebe os logs (padrão: wolfsaasbr@gmail.com)
  *
@@ -281,10 +282,19 @@ function handleCheckout(body) {
   return handleCheckoutInfinite(body)
 }
 
-/* ---------------- ASSINATURA Mercado Pago (recorrente, cartão) ---------------- */
+/* ---------------- ASSINATURA Mercado Pago (HOSPEDADA, com plano) ----------------
+ * Modelo escolhido para destravar o sandbox: criamos um "preapproval_plan" por
+ * loja (POST /preapproval_plan, SEM card_token_id e SEM payer_email) e devolvemos
+ * o init_point. A 1ª cobrança acontece na página do Mercado Pago; no sandbox o
+ * comprador entra com usuário de teste e paga com cartão de teste (sem gastar e
+ * sem o erro "Both payer and collector must be real or test users").
+ * O vínculo loja<->assinatura é via mp_plan_id gravado na loja: nos webhooks o MP
+ * manda o preapproval_plan_id da assinatura e localizamos a loja por mp_plan_id.
+ * A ATIVAÇÃO do plano ocorre quando a 1ª cobrança é aprovada (webhook).
+ */
 
-function mpCreatePreapproval(token, payload) {
-  var res = UrlFetchApp.fetch('https://api.mercadopago.com/preapproval', {
+function mpCreatePlan(token, payload) {
+  var res = UrlFetchApp.fetch('https://api.mercadopago.com/preapproval_plan', {
     method: 'post',
     contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + token },
@@ -294,61 +304,51 @@ function mpCreatePreapproval(token, payload) {
   return { code: res.getResponseCode(), text: res.getContentText() }
 }
 
-function handleSubscribeMp(body) {
+// URL pública da página de assinatura (a 1ª cobrança acontece lá, no MP).
+function mpPlanCheckoutUrl(plan) {
+  var sandbox = String(props().getProperty('MP_USE_SANDBOX') || '').toLowerCase() === 'true'
+  if (sandbox) return plan.sandbox_init_point || plan.init_point || ''
+  return plan.init_point || plan.sandbox_init_point || ''
+}
+
+// Garante o plano da loja (reusa o ativo; senão cria um e grava mp_plan_id).
+function ensureMpPlan(storeId, redirectUrl) {
   var token = props().getProperty('MP_ACCESS_TOKEN')
-  if (!token) {
-    return { ok: false, error: 'MP_ACCESS_TOKEN ausente no GAS' }
+  if (!token) return { error: 'MP_ACCESS_TOKEN ausente no GAS' }
+
+  var row = fetchStore(storeId)
+  if (!row) return { error: 'Loja não encontrada' }
+
+  if (row.mp_plan_id) {
+    try {
+      var existing = mpFetch('/preapproval_plan/' + encodeURIComponent(row.mp_plan_id))
+      if (existing && String(existing.status || '') === 'active') {
+        var url = mpPlanCheckoutUrl(existing)
+        if (url) return { plan_id: String(existing.id), url: url }
+      }
+    } catch (err) { /* plano antigo inválido -> cria outro */ }
   }
 
-  var storeId = String(body.store_id || '')
-  var cardToken = String(body.card_token || '')
-  var email = String(body.email || '')
-  if (!storeId) return { ok: false, error: 'store_id ausente' }
-  if (!cardToken) return { ok: false, error: 'card_token ausente (tokenize o cartão no front)' }
-  if (!email) return { ok: false, error: 'e-mail do assinante ausente' }
-
-  // O card_token é criado no front com a CHAVE PÚBLICA. Se a chave pública e o
-  // access token forem de ambientes diferentes (TEST- x APP_USR-), o MP não
-  // encontra o token -> "Resource not found". Valida antes de chamar a API.
-  var pubEnv = String(body.mp_public_key || '').split('-')[0] // 'TEST' | 'APP_USR'
-  var tokEnv = String(token).split('-')[0]
-  if (pubEnv && tokEnv && pubEnv !== tokEnv) {
-    return {
-      ok: false,
-      error:
-        'Ambientes diferentes: o front usa chave ' + pubEnv +
-        ' e o GAS usa token ' + tokEnv +
-        '. No sandbox use TEST- nos dois; em produção, APP_USR- nos dois.'
-    }
-  }
-
-  var priceCents = Number(body.price_cents || body.amount_cents || 990)
+  var priceCents = Number(props().getProperty('PLAN_PRICE_CENTS') || 990)
   var unitPrice = priceCents / 100 // MP usa reais (float)
-  var external = 'sub:' + storeId + ':' + Date.now()
   var webhook = ScriptApp.getService().getUrl()
 
   var payload = {
     reason: PLAN_MONTHLY_TITLE,
-    external_reference: external,
-    payer_email: email,
-    card_token_id: cardToken,
+    external_reference: 'plan:' + storeId,
     auto_recurring: {
       frequency: 1,
       frequency_type: 'months',
       transaction_amount: unitPrice,
       currency_id: 'BRL'
     },
-    back_url: body.redirect_url || '',
-    notification_url: webhook,
-    status: 'authorized'
+    back_url: redirectUrl || '',
+    notification_url: webhook
   }
 
-  // Alguns parâmetros (ex.: notification_url) podem ser rejeitados conforme a conta.
-  // O card_token é de USO ÚNICO: só tentamos de novo SEM notification_url quando a
-  // própria resposta acusar esse campo. Para qualquer outro 4xx não há retry, senão
-  // reusamos o token e o MP devolve "Card token was used, please generate new".
-  var res = mpCreatePreapproval(token, payload)
+  var res = mpCreatePlan(token, payload)
   var text = res.text
+  // notification_url pode ser rejeitado em algumas contas: tenta sem ele nesse caso.
   if (
     res.code >= 300 && res.code < 500 &&
     payload.notification_url &&
@@ -356,7 +356,7 @@ function handleSubscribeMp(body) {
   ) {
     var fallback = JSON.parse(JSON.stringify(payload))
     delete fallback.notification_url
-    res = mpCreatePreapproval(token, fallback)
+    res = mpCreatePlan(token, fallback)
     text = res.text
   }
   var parsed = {}
@@ -365,40 +365,26 @@ function handleSubscribeMp(body) {
   } catch (err) { /* resposta não-JSON */ }
 
   if (res.code >= 300 || !parsed.id) {
-    var errMsg = parsed.message || parsed.error || 'Mercado Pago recusou a assinatura'
-    if (/card token was used|already been used|used, please generate|j[aá] foi usado|consumido/i.test(String(errMsg))) {
-      errMsg = 'Este token de cartão já foi usado. Feche e reabra o formulário para gerar um novo token e tente novamente.'
-    }
-    notify('Falha ao criar assinatura MP (loja ' + storeId + ')', text)
-    return {
-      ok: false,
-      error: errMsg,
-      status: res.code
-    }
+    var errMsg = parsed.message || parsed.error || 'Mercado Pago recusou o plano'
+    notify('Falha ao criar plano MP (loja ' + storeId + ')', text)
+    return { error: errMsg, status: res.code }
   }
+  var checkoutUrl = mpPlanCheckoutUrl(parsed)
+  if (!checkoutUrl) {
+    notify('Plano MP criado sem init_point (loja ' + storeId + ')', text)
+    return { error: 'Mercado Pago não devolveu o link de assinatura', status: res.code }
+  }
+  patchStore(storeId, { mp_plan_id: String(parsed.id) })
+  return { plan_id: String(parsed.id), url: checkoutUrl }
+}
 
-  // MP só autoriza com cartão válido: libera o plano já na criação.
-  // As cobranças seguintes renovam +30d via webhook de pagamento.
-  patchStore(storeId, {
-    plan: 'pro',
-    plan_expires_at: planExpiresAt(),
-    mp_subscription_id: String(parsed.id),
-    mp_subscription_status: 'authorized'
-  })
-  var row = fetchStore(storeId)
-  if (!row || row.plan !== 'pro') {
-    notify('ATENÇÃO: assinatura criada mas plano não confirmado como pro', 'sub=' + parsed.id + '\nstoreId=' + storeId)
-    throw new Error('Plano não confirmado como pro')
-  }
-  notify(
-    'Assinatura criada - plano ativado',
-    'Loja: ' + (row.name || row.slug || row.id) + '\n' +
-      'Subscription MP: ' + parsed.id + '\n' +
-      'Status: ' + parsed.status + '\n' +
-      'Valor: R$ ' + unitPrice.toFixed(2) + '/mês\n' +
-      'Validade: ' + row.plan_expires_at
-  )
-  return { ok: true, subscription_id: parsed.id, status: parsed.status || 'authorized' }
+function handleSubscribeMp(body) {
+  var storeId = String(body.store_id || '')
+  if (!storeId) return { ok: false, error: 'store_id ausente' }
+  var redirectUrl = String(body.redirect_url || '')
+  var plan = ensureMpPlan(storeId, redirectUrl)
+  if (plan.error) return { ok: false, error: plan.error, status: plan.status }
+  return { ok: true, url: plan.url, plan_id: plan.plan_id }
 }
 
 function handleCancelSubscriptionMp(body) {
@@ -467,7 +453,7 @@ function fetchStore(storeId) {
     throw new Error('SUPABASE_URL/SERVICE_ROLE ausentes no GAS')
   }
   var res = UrlFetchApp.fetch(
-    url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId) + '&select=id,slug,plan,plan_expires_at,name,mp_subscription_id,mp_subscription_status',
+    url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId) + '&select=id,slug,plan,plan_expires_at,name,mp_subscription_id,mp_subscription_status,mp_plan_id',
     {
       method: 'get',
       headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey },
@@ -510,6 +496,27 @@ function activatePlan(storeId) {
     plan: 'pro',
     plan_expires_at: planExpiresAt()
   })
+}
+
+// Localiza a loja que tem mp_plan_id = <planId>. Usada nos webhooks do modelo
+// hospedado: a assinatura criada pelo MP traz o preapproval_plan_id e achamos a
+// loja por essa coluna. Retorna o id da loja ou '' se não achar.
+function findStoreIdByPlanId(planId) {
+  var p = props()
+  var url = p.getProperty('SUPABASE_URL')
+  var serviceKey = p.getProperty('SUPABASE_SERVICE_ROLE')
+  if (!url || !serviceKey || !planId) return ''
+  var res = UrlFetchApp.fetch(
+    url + '/rest/v1/stores?mp_plan_id=eq.' + encodeURIComponent(planId) + '&select=id&limit=1',
+    {
+      method: 'get',
+      headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey },
+      muteHttpExceptions: true
+    }
+  )
+  if (res.getResponseCode() >= 300) return ''
+  var rows = JSON.parse(res.getContentText() || '[]')
+  return rows && rows.length ? String(rows[0].id) : ''
 }
 
 function resolveStoreFromOrderNsu(orderNsu) {
@@ -605,16 +612,39 @@ function fetchMpAuthorizedPayment(authId) {
   return mpFetch('/authorized_payments/' + encodeURIComponent(authId))
 }
 
+// Resolve a loja de um evento MP. Ordem: external_reference (avulso/1x) ->
+// preapproval_plan_id (assinatura hospedada) -> preapproval (se só tiver o id).
+// external_reference 'plan:<mpPlanId>' não vira store por prefixo: o plano do MP
+// tem id próprio; só dá para achar a loja via mp_plan_id no Supabase.
+function resolveStoreForMp(ext, planId, preapprovalId) {
+  var extStr = String(ext || '')
+  if (extStr.indexOf('plan:') !== 0) {
+    var storeId = resolveStoreFromOrderNsu(extStr)
+    if (storeId) return storeId
+  }
+  if (planId) storeId = findStoreIdByPlanId(String(planId))
+  if (!storeId && preapprovalId) {
+    try {
+      var pre = fetchMpPreapproval(String(preapprovalId))
+      if (pre && pre.preapproval_plan_id) storeId = findStoreIdByPlanId(String(pre.preapproval_plan_id))
+    } catch (err) { /* preapproval não encontrado */ }
+  }
+  return storeId
+}
+
 // Cobrança pontual aprovada (1x ou mensalidade da assinatura): ativa/renova +30d.
 function handleMpApprovedPayment(paymentId, payment) {
   if (mpProcessed('pay:' + paymentId)) {
     return { success: true, message: null, already: true }
   }
   var orderNsu = String(payment.external_reference || '')
-  var storeId = resolveStoreFromOrderNsu(orderNsu)
+  var storeId = resolveStoreForMp(orderNsu, payment.preapproval_plan_id, payment.preapproval_id)
   if (!storeId) {
-    notify('Webhook MP aprovado sem loja', JSON.stringify(payment, null, 2))
-    throw new Error('Loja não identificada no pagamento aprovado')
+    // Sem external_reference nem vínculo de plano: provável 1ª cobrança de assinatura
+    // que ainda não teve a subscription criada/linkada. Não damos 500 (evita retry em
+    // loop); registramos no log — a ativação chega pelo subscription_preapproval.
+    notify('Webhook MP aprovado sem loja (aguardando vínculo?)', JSON.stringify(payment, null, 2))
+    return { success: true, message: null, status: 'no-store' }
   }
   var amount = (payment.transaction_amount || payment.transaction_details && payment.transaction_details.total_paid_amount)
   var capture = payment.payment_method_id || payment.payment_type_id || '-'
@@ -633,8 +663,11 @@ function handleMpPaymentWebhook(paymentId) {
   return handleMpApprovedPayment(paymentId, payment)
 }
 
-// Evento de assinatura (criada, cancelada, pausada). Não mexe no plano por aqui:
-// a liberação acontece na criação (authorized) e nas cobranças aprovadas.
+// Evento de assinatura (criada, paga, cancelada, pausada). No modelo hospedado o
+// MP cria a assinatura (preapproval) SÓ depois da 1ª cobrança aprovada na página
+// dele. Por isso, aqui com status "authorized" liberamos o plano +30d e gravamos
+// o vínculo loja <-> subscription; renewals seguintes chegam como
+// subscription_authorized_payment e renovam +30d.
 function handleMpPreapprovalWebhook(subId) {
   if (!subId) {
     notify('Webhook MP preapproval sem id', '')
@@ -642,25 +675,34 @@ function handleMpPreapprovalWebhook(subId) {
   }
   var pre = fetchMpPreapproval(subId)
   var status = String(pre.status || '')
-  var ext = String(pre.external_reference || '')
-  var storeId = resolveStoreFromOrderNsu(ext)
+  var storeId = resolveStoreForMp(String(pre.external_reference || ''), pre.preapproval_plan_id, subId)
   if (!storeId) {
     notify('Webhook MP preapproval sem loja', JSON.stringify(pre, null, 2))
     throw new Error('Loja não identificada no preapproval')
-  }
-  if (mpProcessed('sub:' + subId)) {
-    return { success: true, message: null, already: true }
   }
   if (status === 'canceled' || status === 'paused') {
     patchStore(storeId, { mp_subscription_status: status })
     return { success: true, message: null, status: status }
   }
   if (status === 'authorized') {
-    // Garante o vínculo loja <-> assinatura caso a criação não tenha persistido.
-    var row = fetchStore(storeId)
-    if (row && (!row.mp_subscription_id || !row.mp_subscription_status)) {
-      patchStore(storeId, { mp_subscription_id: subId, mp_subscription_status: 'authorized' })
+    if (mpProcessed('sub:' + subId)) {
+      return { success: true, message: null, already: true }
     }
+    // 1ª cobrança paga: ativa o plano e guarda o vínculo loja <-> subscription.
+    patchStore(storeId, { mp_subscription_id: subId, mp_subscription_status: 'authorized' })
+    activatePlan(storeId)
+    var row = fetchStore(storeId)
+    if (!row || row.plan !== 'pro') {
+      notify('ATENÇÃO: assinatura ativada mas plano não confirmado como pro', 'sub=' + subId + '\nstoreId=' + storeId)
+      throw new Error('Plano não confirmado como pro')
+    }
+    notify(
+      'Assinatura ativada - plano liberado',
+      'Loja: ' + (row.name || row.slug || row.id) + '\n' +
+        'Subscription MP: ' + subId + '\n' +
+        'Status: ' + status + '\n' +
+        'Validade: ' + row.plan_expires_at
+    )
   }
   return { success: true, message: null, status: status }
 }
@@ -673,13 +715,7 @@ function handleMpAuthorizedPaymentWebhook(authId) {
   }
   var auth = fetchMpAuthorizedPayment(authId)
   var ext = String(auth.external_reference || '')
-  var storeId = resolveStoreFromOrderNsu(ext)
-  if (!storeId && auth.preapproval_id) {
-    try {
-      var pre = fetchMpPreapproval(auth.preapproval_id)
-      storeId = resolveStoreFromOrderNsu(String(pre.external_reference || ''))
-    } catch (err) { /* preapproval não encontrado */ }
-  }
+  var storeId = resolveStoreForMp(ext, auth.preapproval_plan_id, auth.preapproval_id)
   if (!storeId) {
     notify('Webhook MP authorized_payment sem loja', JSON.stringify(auth, null, 2))
     throw new Error('Loja não identificada no authorized_payment')

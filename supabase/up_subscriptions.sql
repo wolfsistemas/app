@@ -4,8 +4,10 @@
 --
 -- Depois disso:
 --   1. Atualize o GAS com o novo gas/all-in-one.js e publique "Nova versão".
---   2. No GAS, defina PAYMENT_PROVIDER=mp e MP_ACCESS_TOKEN.
---   3. No .env.production do front, preencha VITE_MP_PUBLIC_KEY (chave pública).
+--   2. No GAS, defina PAYMENT_PROVIDER=mp e MP_ACCESS_TOKEN (TEST-... se for sandbox).
+--   3. Rode também a migração supabase/up_mp_plans.sql (coluna mp_plan_id).
+--      O front usa checkout HOSPEDADO: o GAS devolve o init_point do plano e o
+--      comprador paga na página do Mercado Pago — NÃO existe VITE_MP_PUBLIC_KEY.
 --
 -- Colunas são aditivas; não apaga nada.
 

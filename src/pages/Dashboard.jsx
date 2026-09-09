@@ -4,9 +4,8 @@ import { useAuth } from '../lib/AuthContext.jsx'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import Brand from '../components/Brand.jsx'
 import PhotoInput from '../components/PhotoInput.jsx'
-import { cancelSubscription, createCheckout, billingUrl, mpPublicKey } from '../lib/billing.js'
+import { cancelSubscription, createCheckout, createSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
-import MPBrickModal from '../components/MPBrickModal.jsx'
 
 function beep() {
   try {
@@ -48,7 +47,7 @@ export default function Dashboard() {
   const [toast, setToast] = useState('')
   const [billingBusy, setBillingBusy] = useState(false)
   const [subBusy, setSubBusy] = useState(false)
-  const [showSubscribe, setShowSubscribe] = useState(false)
+  const [mpSubAvailable, setMpSubAvailable] = useState(false)
   const url = publicUrl(store.slug)
   const isPro = isProStore(store)
   const planEnd = planExpiresAt(store)
@@ -57,6 +56,15 @@ export default function Dashboard() {
   const { id: storeId } = store
   const navigate = useNavigate()
   const location = useLocation()
+
+  useEffect(() => {
+    if (!billingUrl) return undefined
+    let dead = false
+    mpBillingAvailable().then((ok) => {
+      if (!dead) setMpSubAvailable(ok)
+    })
+    return () => { dead = true }
+  }, [])
 
   useEffect(() => {
     const q = new URLSearchParams(location.search)
@@ -122,11 +130,17 @@ export default function Dashboard() {
     }
   }
 
-  function onSubscribed() {
-    setShowSubscribe(false)
-    setMsg('Assinatura confirmada! Seu plano está sendo ativado…')
-    window.setTimeout(() => { refresh() }, 2500)
-    window.setTimeout(() => { refresh() }, 6000)
+  async function subscribe() {
+    setError('')
+    setBillingBusy(true)
+    try {
+      const url = await createSubscription({ storeId })
+      window.location.href = url
+    } catch (err) {
+      setError(err.message || 'Não foi possível gerar o link de assinatura.')
+    } finally {
+      setBillingBusy(false)
+    }
   }
 
   async function cancelSub() {
@@ -478,7 +492,7 @@ export default function Dashboard() {
             </article>
             <article className={`card pad stack ${isPro ? 'card-gold' : ''}`}>
               <h3>Plano Loja</h3>
-              <p className="price">{PLAN_PRICE}/30 dias</p>
+              <p className="price">{mpSubAvailable ? `${PLAN_PRICE}/mês` : `${PLAN_PRICE}/30 dias`}</p>
               <ul className="list">
                 <li>Produtos ilimitados</li>
                 <li>Sem a marca VitrineZap</li>
@@ -499,21 +513,21 @@ export default function Dashboard() {
                     </button>
                   )}
                 </>
-              ) : billingUrl ? (
-                mpPublicKey ? (
-                  <>
-                    <button className="btn btn-gold" onClick={() => setShowSubscribe(true)}>
-                      Assinar com cartão · {PLAN_PRICE}/mês
-                    </button>
-                    <button className="btn btn-ghost" disabled={billingBusy} onClick={upgrade}>
-                      {billingBusy ? 'Aguarde...' : 'Pagar avulso (Pix/cartão)'}
-                    </button>
-                  </>
-                ) : (
-                  <button className="btn btn-gold" disabled={billingBusy} onClick={upgrade}>
-                    {billingBusy ? 'Aguarde...' : 'Assinar agora'}
+              ) : billingUrl && mpSubAvailable ? (
+                <>
+                  <button className="btn btn-gold" disabled={billingBusy} onClick={subscribe}>
+                    {billingBusy ? 'Gerando link…' : `Assinar · ${PLAN_PRICE}/mês`}
                   </button>
-                )
+                  <button className="btn btn-ghost" disabled={billingBusy} onClick={upgrade}>
+                    {billingBusy ? 'Aguarde...' : 'Pagar avulso (Pix/cartão)'}
+                  </button>
+                </>
+              ) : billingUrl ? (
+                <>
+                  <button className="btn btn-gold" disabled={billingBusy} onClick={upgrade}>
+                    {billingBusy ? 'Aguarde...' : `Pagar avulso · ${PLAN_PRICE}/30 dias`}
+                  </button>
+                </>
               ) : (
                 <>
                   <button className="btn btn-gold" onClick={demoActivate}>Ativar neste ambiente</button>
@@ -529,25 +543,15 @@ export default function Dashboard() {
                 <p className="help">Ambiente de demonstração: o plano foi ativado manualmente.</p>
               )}
               <p className="help">
-                {mpPublicKey
-                  ? 'No cartão, a cobrança é mensal e automática — sem fidelidade, cancele quando quiser.'
-                  : 'Pagamento por Pix ou cartão via link seguro. Na confirmação, o plano é liberado automaticamente por 30 dias via webhook.'}
+                {mpSubAvailable
+                  ? 'Assinatura mensal automática: a primeira cobrança é paga na página do Mercado Pago (Pix ou cartão) e as próximas são cobradas todo mês até você cancelar — sem fidelidade.'
+                  : 'Pagamento avulso via link seguro (Pix ou cartão): na confirmação, o plano é liberado automaticamente por 30 dias via webhook.'}
               </p>
             </article>
           </section>
         )}
       </main>
       {toast && <div className="toast" onClick={() => setToast('')}>{toast}</div>}
-      {showSubscribe && (
-        <MPBrickModal
-          open={showSubscribe}
-          onClose={() => setShowSubscribe(false)}
-          storeId={storeId}
-          email={user?.email || ''}
-          name={user?.user_metadata?.name || ''}
-          onSuccess={onSubscribed}
-        />
-      )}
     </div>
   )
 }
