@@ -15,7 +15,7 @@ Sem VPS. O browser fala direto com o Supabase.
 
 ## O que já está no MVP
 
-- Landing e planos (grátis / Plano Loja R$ 9,90 por 30 dias)
+- Landing e planos (grátis / Plano Loja R$ 9,90 por 30 dias ou assinatura mensal recorrente)
 - Cadastro, login e onboarding da loja
 - Recuperação de senha por e-mail
 - Vitrine pública por slug (`/ana-atelier` é a demo)
@@ -24,7 +24,7 @@ Sem VPS. O browser fala direto com o Supabase.
 - Painel: produtos, pedidos (tempo real com som), tema, PIX, plano
 - Limite de 8 produtos no plano grátis
 - Marca VitrineZap no rodapé do plano free (removida no Loja)
-- Checkout via link (InfinitePay / Mercado Pago) + expiração de plano por webhook
+- Checkout avulso via link (InfinitePay / Mercado Pago) + **assinatura recorrente no cartão (Mercado Pago, cancele quando quiser)**
 
 ## Como rodar
 
@@ -39,7 +39,7 @@ Sem `.env`, o app usa **modo local** (dados no navegador + loja demo).
 
 1. Crie um projeto no Supabase.
 2. No SQL Editor, rode nesta ordem: `supabase/schema.sql`, `supabase/rls.sql`, `supabase/storage.sql`.
-3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime).
+3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql`.
 4. Em Authentication > Providers, deixe e-mail/senha ligado. Para testar rápido, desligue **Confirm email**.
 5. Em Authentication > URL configuration: Site URL e Redirect URLs apontando para o endereço do app (`https://wolfsistemas.github.io/app/**`).
 6. Copie `.env.example` para `.env` e preencha URL + anon key.
@@ -67,6 +67,23 @@ No GAS, mude a property `PAYMENT_PROVIDER` (e crie nova versão do deploy):
 
 - `infinitepay` (padrão) — usa `INFINITEPAY_HANDLE` (sua InfiniteTag, ex.: `maiconvss`, sem o `$`)
 - `mp` — usa `MP_ACCESS_TOKEN` (Access Token do Mercado Pago); opcional `MP_USE_SANDBOX=true` para testar em sandbox
+
+### Assinatura recorrente no cartão (Mercado Pago)
+
+Com o provedor em `mp`, o painel oferece **"Assinar com cartão · R$ 9,90/mês"**: cobrança mensal automática, sem fidelidade (cancele quando quiser). Passos:
+
+1. **GAS**: cole o novo `gas/all-in-one.js`, publique "Nova versão" e defina `PAYMENT_PROVIDER=mp` + `MP_ACCESS_TOKEN`.
+2. **Supabase**: rode `supabase/up_subscriptions.sql` (adiciona `mp_subscription_id` e `mp_subscription_status` na `stores`).
+3. **Front**: preencha `VITE_MP_PUBLIC_KEY` (chave **pública** do Mercado Pago, de Suas integrações > sua aplicação) no `.env.production` e faça o build/CI. Sem essa chave, o botão de assinatura fica oculto e só aparece o pagamento avulso.
+
+Como funciona:
+
+- O front abre um modal com o **CardPayment Brick** (cartão nunca passa pelo seu servidor; o Mercado Pago tokeniza).
+- O GAS cria um `preapproval` (status `authorized`) com cobrança mensal de R$ 9,90. O plano é ativado na criação (cartão já validado pelo MP).
+- A cada mensalidade paga, o webhook renova `plan_expires_at` por +30 dias. Eventos de `preapproval` (cancelado/pausado) só atualizam o status — **o acesso continua até a data já paga**.
+- No painel, quem assinou vê "Cancelar assinatura recorrente" (PUT `/preapproval/{id}`).
+
+Observação: recorrência automática exige **cartão**. O pagamento avulso via link (Pix/cartão) continua disponível como alternativa.
 
 Properties comuns: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `EMAIL_LOG` (padrão: wolfsaasbr@gmail.com).
 

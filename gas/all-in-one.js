@@ -10,13 +10,21 @@
  * gas/billing-webhook.js (cada um com sua própria URL).
  *
  * Roteamento automático:
- *   POST { action: "checkout", ... } -> gera link de pagamento
- *   POST { image, ... }             -> upload ImgBB
- *   POST evento de pagamento         -> ativa/renova o plano no Supabase
+ *   POST { action: "checkout", ... }         -> link de pagamento avulso (1x)
+ *   POST { action: "subscribe", ... }        -> assinatura recorrente MP (cartão)
+ *   POST { action: "cancel_subscription" }   -> cancela a assinatura MP da loja
+ *   POST { image, ... }                      -> upload ImgBB
+ *   POST evento de pagamento                 -> ativa/renova o plano no Supabase
  *
  * PROVEDOR DE PAGAMENTO (troque sem mexer no app):
  *   PAYMENT_PROVIDER = infinitepay  (padrão atual, InfinitePay)
  *   PAYMENT_PROVIDER = mp           (Mercado Pago, Checkout Pro)
+ *
+ * ASSINATURA RECORRENTE (provider mp):
+ *   O front tokeniza o cartão com o CardPayment Brick e envia o card_token.
+ *   Aqui criamos um preapproval (status "authorized") que cobra R$ 9,90/mês
+ *   automaticamente. O plano é ativado na criação (cartão já validado pelo MP)
+ *   e renovado +30d a cada cobrança recorrente (webhook de pagamento).
  *
  * Configuração (Project Settings > Script properties):
  *   SUPABASE_URL            https://xxxx.supabase.co
@@ -28,6 +36,7 @@
  *   INFINITEPAY_HANDLE      sua InfiniteTag (ex.: maiconvss, sem o $)  [provider infinitepay]
  *   MP_ACCESS_TOKEN         Access Token do Mercado Pago               [provider mp]
  *   MP_USE_SANDBOX          true para usar sandbox_init_point          [provider mp, opcional]
+ *   MP_PUBLIC_KEY           chave pública do MP (vai no .env do front, NÃO aqui) — veja README
  *
  *   EMAIL_LOG               e-mail que recebe os logs (padrão: wolfsaasbr@gmail.com)
  *
@@ -38,6 +47,7 @@
 
 var PLAN_DAYS = 30
 var PLAN_TITLE = 'Plano Loja VitrineZap (30 dias)'
+var PLAN_MONTHLY_TITLE = 'VitrineZap Plano Loja (assinatura mensal)'
 var DEFAULT_LOG_EMAIL = 'wolfsaasbr@gmail.com'
 
 function jsonOut(obj) {
@@ -265,6 +275,156 @@ function handleCheckout(body) {
   return handleCheckoutInfinite(body)
 }
 
+/* ---------------- ASSINATURA Mercado Pago (recorrente, cartão) ---------------- */
+
+function mpCreatePreapproval(token, payload) {
+  var res = UrlFetchApp.fetch('https://api.mercadopago.com/preapproval', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  })
+  return { code: res.getResponseCode(), text: res.getContentText() }
+}
+
+function handleSubscribeMp(body) {
+  var token = props().getProperty('MP_ACCESS_TOKEN')
+  if (!token) {
+    return { ok: false, error: 'MP_ACCESS_TOKEN ausente no GAS' }
+  }
+
+  var storeId = String(body.store_id || '')
+  var cardToken = String(body.card_token || '')
+  var email = String(body.email || '')
+  if (!storeId) return { ok: false, error: 'store_id ausente' }
+  if (!cardToken) return { ok: false, error: 'card_token ausente (tokenize o cartão no front)' }
+  if (!email) return { ok: false, error: 'e-mail do assinante ausente' }
+
+  var priceCents = Number(body.price_cents || body.amount_cents || 990)
+  var unitPrice = priceCents / 100 // MP usa reais (float)
+  var external = 'sub:' + storeId + ':' + Date.now()
+  var webhook = ScriptApp.getService().getUrl()
+
+  var payload = {
+    reason: PLAN_MONTHLY_TITLE,
+    external_reference: external,
+    payer_email: email,
+    card_token_id: cardToken,
+    auto_recurring: {
+      frequency: 1,
+      frequency_type: 'months',
+      transaction_amount: unitPrice,
+      currency_id: 'BRL'
+    },
+    back_url: body.redirect_url || '',
+    notification_url: webhook,
+    status: 'authorized'
+  }
+
+  // Alguns parâmetros (ex.: notification_url) podem ser rejeitados conforme a conta.
+  // Se der 4xx, tenta UMA vez sem esse campo antes de devolver o erro.
+  var res = mpCreatePreapproval(token, payload)
+  if (res.code >= 300 && res.code < 500 && payload.notification_url) {
+    var fallback = JSON.parse(JSON.stringify(payload))
+    delete fallback.notification_url
+    res = mpCreatePreapproval(token, fallback)
+  }
+  var text = res.text
+  var parsed = {}
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) { /* resposta não-JSON */ }
+
+  if (res.code >= 300 || !parsed.id) {
+    notify('Falha ao criar assinatura MP (loja ' + storeId + ')', text)
+    return {
+      ok: false,
+      error: parsed.message || parsed.error || 'Mercado Pago recusou a assinatura',
+      status: res.code
+    }
+  }
+
+  // MP só autoriza com cartão válido: libera o plano já na criação.
+  // As cobranças seguintes renovam +30d via webhook de pagamento.
+  patchStore(storeId, {
+    plan: 'pro',
+    plan_expires_at: planExpiresAt(),
+    mp_subscription_id: String(parsed.id),
+    mp_subscription_status: 'authorized'
+  })
+  var row = fetchStore(storeId)
+  if (!row || row.plan !== 'pro') {
+    notify('ATENÇÃO: assinatura criada mas plano não confirmado como pro', 'sub=' + parsed.id + '\nstoreId=' + storeId)
+    throw new Error('Plano não confirmado como pro')
+  }
+  notify(
+    'Assinatura criada - plano ativado',
+    'Loja: ' + (row.name || row.slug || row.id) + '\n' +
+      'Subscription MP: ' + parsed.id + '\n' +
+      'Status: ' + parsed.status + '\n' +
+      'Valor: R$ ' + unitPrice.toFixed(2) + '/mês\n' +
+      'Validade: ' + row.plan_expires_at
+  )
+  return { ok: true, subscription_id: parsed.id, status: parsed.status || 'authorized' }
+}
+
+function handleCancelSubscriptionMp(body) {
+  var storeId = String(body.store_id || '')
+  if (!storeId) return { ok: false, error: 'store_id ausente' }
+  var row = fetchStore(storeId)
+  if (!row) return { ok: false, error: 'Loja não encontrada' }
+
+  var subId = String(row.mp_subscription_id || '')
+  if (!subId) {
+    return { ok: false, error: 'Esta loja não possui assinatura registrada (mp_subscription_id vazio)' }
+  }
+
+  var token = props().getProperty('MP_ACCESS_TOKEN')
+  if (!token) return { ok: false, error: 'MP_ACCESS_TOKEN ausente no GAS' }
+
+  var res = UrlFetchApp.fetch('https://api.mercadopago.com/preapproval/' + encodeURIComponent(subId), {
+    method: 'put',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify({ status: 'canceled' }),
+    muteHttpExceptions: true
+  })
+  var text = res.getContentText()
+  var parsed = {}
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) { /* resposta não-JSON */ }
+
+  if (res.getResponseCode() >= 300) {
+    notify('Falha ao cancelar assinatura (loja ' + storeId + ', sub ' + subId + ')', text)
+    return {
+      ok: false,
+      error: parsed.message || parsed.error || 'Mercado Pago recusou o cancelamento',
+      status: res.getResponseCode()
+    }
+  }
+
+  // O plano NÃO é revogado na hora: o cliente mantém acesso até a validade paga.
+  patchStore(storeId, { mp_subscription_status: 'canceled' })
+  notify('Assinatura cancelada', 'Loja: ' + (row.name || row.slug || row.id) + '\nSubscription MP: ' + subId)
+  return { ok: true, subscription_id: subId }
+}
+
+function handleSubscribe(body) {
+  if (provider() !== 'mp') {
+    return { ok: false, error: 'Assinatura recorrente exige PAYMENT_PROVIDER=mp no GAS' }
+  }
+  return handleSubscribeMp(body)
+}
+
+function handleCancelSubscription(body) {
+  if (provider() !== 'mp') {
+    return { ok: false, error: 'Cancelamento de assinatura exige PAYMENT_PROVIDER=mp no GAS' }
+  }
+  return handleCancelSubscriptionMp(body)
+}
+
 /* ---------------- ATIVAÇÃO do plano ---------------- */
 
 function fetchStore(storeId) {
@@ -275,7 +435,7 @@ function fetchStore(storeId) {
     throw new Error('SUPABASE_URL/SERVICE_ROLE ausentes no GAS')
   }
   var res = UrlFetchApp.fetch(
-    url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId) + '&select=id,slug,plan,plan_expires_at,name',
+    url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId) + '&select=id,slug,plan,plan_expires_at,name,mp_subscription_id,mp_subscription_status',
     {
       method: 'get',
       headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey },
@@ -290,7 +450,7 @@ function fetchStore(storeId) {
   return rows && rows.length ? rows[0] : null
 }
 
-function activatePlan(storeId) {
+function patchStore(storeId, fields) {
   var p = props()
   var url = p.getProperty('SUPABASE_URL')
   var serviceKey = p.getProperty('SUPABASE_SERVICE_ROLE')
@@ -305,10 +465,7 @@ function activatePlan(storeId) {
       Authorization: 'Bearer ' + serviceKey,
       Prefer: 'return=minimal'
     },
-    payload: JSON.stringify({
-      plan: 'pro',
-      plan_expires_at: planExpiresAt()
-    }),
+    payload: JSON.stringify(fields),
     muteHttpExceptions: true
   })
   if (res.getResponseCode() >= 300) {
@@ -316,9 +473,18 @@ function activatePlan(storeId) {
   }
 }
 
+function activatePlan(storeId) {
+  patchStore(storeId, {
+    plan: 'pro',
+    plan_expires_at: planExpiresAt()
+  })
+}
+
 function resolveStoreFromOrderNsu(orderNsu) {
   var s = String(orderNsu || '')
-  if (s.indexOf(':') > 0) return s.split(':')[0]
+  if (s.indexOf('sub:') === 0) s = s.slice(4) // assinatura MP: sub:<store>:<ts>
+  var i = s.indexOf(':')
+  if (i > 0) return s.slice(0, i)
   return s
 }
 
@@ -358,9 +524,13 @@ function handleInfiniteWebhook(body) {
 
 /* ---------------- WEBHOOK Mercado Pago ---------------- */
 
+var MP_SUB_TOPICS = ['preapproval', 'subscription_preapproval', 'subscription_authorized_payment', 'subscription_preapproval_plan', 'merchant_order']
+
 function isMpWebhook(e, body) {
-  if (body.type === 'payment' || (body.data && body.data.id)) return true
-  return (e.parameter && e.parameter.topic === 'payment')
+  var type = String(body.type || (e.parameter && e.parameter.topic) || '')
+  if (type === 'payment' || MP_SUB_TOPICS.indexOf(type) !== -1) return true
+  if (body.data && body.data.id) return true
+  return false
 }
 
 function mpProcessed(id) {
@@ -376,52 +546,138 @@ function mpProcessed(id) {
   return false
 }
 
-function fetchMpPayment(paymentId) {
+function mpFetch(path) {
   var token = props().getProperty('MP_ACCESS_TOKEN')
   if (!token) throw new Error('MP_ACCESS_TOKEN ausente no GAS')
-  var res = UrlFetchApp.fetch('https://api.mercadopago.com/v1/payments/' + encodeURIComponent(paymentId), {
+  var res = UrlFetchApp.fetch('https://api.mercadopago.com' + path, {
     method: 'get',
     headers: { Authorization: 'Bearer ' + token },
     muteHttpExceptions: true
   })
   var text = res.getContentText()
   if (res.getResponseCode() >= 300) {
-    throw new Error('GET payment MP falhou (' + res.getResponseCode() + '): ' + text.slice(0, 300))
+    throw new Error('GET ' + path + ' falhou (' + res.getResponseCode() + '): ' + text.slice(0, 300))
   }
   return JSON.parse(text || '{}')
 }
 
-function handleMpWebhook(e, body) {
-  var paymentId = String((body.data && body.data.id) || (e.parameter && e.parameter.id) || '')
-  if (!paymentId) {
-    notify('Webhook MP sem payment id', JSON.stringify(body, null, 2))
-    throw new Error('Webhook MP sem payment id')
-  }
+function fetchMpPayment(paymentId) {
+  return mpFetch('/v1/payments/' + encodeURIComponent(paymentId))
+}
 
-  var payment = fetchMpPayment(paymentId)
-  var status = String(payment.status || '')
-  if (status !== 'approved') {
-    // Pagamento ainda não aprovado (created/pending): ack silencioso.
-    return { success: true, message: null, status: status }
-  }
+function fetchMpPreapproval(subId) {
+  return mpFetch('/preapproval/' + encodeURIComponent(subId))
+}
 
-  // Ativa só na 1ª notificação aprovada por payment; as demais viram ack.
-  if (mpProcessed(paymentId)) {
+function fetchMpAuthorizedPayment(authId) {
+  return mpFetch('/authorized_payments/' + encodeURIComponent(authId))
+}
+
+// Cobrança pontual aprovada (1x ou mensalidade da assinatura): ativa/renova +30d.
+function handleMpApprovedPayment(paymentId, payment) {
+  if (mpProcessed('pay:' + paymentId)) {
     return { success: true, message: null, already: true }
   }
-
-  var orderNsu = String(payment.external_reference || body.external_reference || '')
+  var orderNsu = String(payment.external_reference || '')
   var storeId = resolveStoreFromOrderNsu(orderNsu)
   if (!storeId) {
     notify('Webhook MP aprovado sem loja', JSON.stringify(payment, null, 2))
     throw new Error('Loja não identificada no pagamento aprovado')
   }
-
   var amount = (payment.transaction_amount || payment.transaction_details && payment.transaction_details.total_paid_amount)
   var capture = payment.payment_method_id || payment.payment_type_id || '-'
   var receipt = (payment.transaction_details && payment.transaction_details.external_resource_url) || ''
   confirmPlan(storeId, orderNsu, { payment_id: paymentId }, capture, amount, receipt)
   return { success: true, message: null }
+}
+
+function handleMpPaymentWebhook(paymentId) {
+  var payment = fetchMpPayment(paymentId)
+  var status = String(payment.status || '')
+  if (status !== 'approved') {
+    // Pagamento ainda não aprovado (created/pending/rejected): ack silencioso.
+    return { success: true, message: null, status: status }
+  }
+  return handleMpApprovedPayment(paymentId, payment)
+}
+
+// Evento de assinatura (criada, cancelada, pausada). Não mexe no plano por aqui:
+// a liberação acontece na criação (authorized) e nas cobranças aprovadas.
+function handleMpPreapprovalWebhook(subId) {
+  if (!subId) {
+    notify('Webhook MP preapproval sem id', '')
+    throw new Error('Webhook preapproval sem id')
+  }
+  var pre = fetchMpPreapproval(subId)
+  var status = String(pre.status || '')
+  var ext = String(pre.external_reference || '')
+  var storeId = resolveStoreFromOrderNsu(ext)
+  if (!storeId) {
+    notify('Webhook MP preapproval sem loja', JSON.stringify(pre, null, 2))
+    throw new Error('Loja não identificada no preapproval')
+  }
+  if (mpProcessed('sub:' + subId)) {
+    return { success: true, message: null, already: true }
+  }
+  if (status === 'canceled' || status === 'paused') {
+    patchStore(storeId, { mp_subscription_status: status })
+    return { success: true, message: null, status: status }
+  }
+  if (status === 'authorized') {
+    // Garante o vínculo loja <-> assinatura caso a criação não tenha persistido.
+    var row = fetchStore(storeId)
+    if (row && (!row.mp_subscription_id || !row.mp_subscription_status)) {
+      patchStore(storeId, { mp_subscription_id: subId, mp_subscription_status: 'authorized' })
+    }
+  }
+  return { success: true, message: null, status: status }
+}
+
+// Mensalidade recorrente paga: renova o plano por mais 30 dias.
+function handleMpAuthorizedPaymentWebhook(authId) {
+  if (!authId) {
+    notify('Webhook MP authorized_payment sem id', '')
+    throw new Error('Webhook authorized_payment sem id')
+  }
+  var auth = fetchMpAuthorizedPayment(authId)
+  var ext = String(auth.external_reference || '')
+  var storeId = resolveStoreFromOrderNsu(ext)
+  if (!storeId && auth.preapproval_id) {
+    try {
+      var pre = fetchMpPreapproval(auth.preapproval_id)
+      storeId = resolveStoreFromOrderNsu(String(pre.external_reference || ''))
+    } catch (err) { /* preapproval não encontrado */ }
+  }
+  if (!storeId) {
+    notify('Webhook MP authorized_payment sem loja', JSON.stringify(auth, null, 2))
+    throw new Error('Loja não identificada no authorized_payment')
+  }
+  var amount = auth.transaction_amount || auth.amount || '-'
+  handleMpApprovedPayment('ap:' + authId, {
+    external_reference: ext || (storeId + ':' + authId),
+    status: 'approved',
+    transaction_amount: amount,
+    payment_method_id: auth.payment_method_id || '-'
+  })
+  return { success: true, message: null }
+}
+
+function handleMpWebhook(e, body) {
+  var type = String(body.type || (e.parameter && e.parameter.topic) || 'payment')
+  var dataId = String((body.data && body.data.id) || (e.parameter && e.parameter.id) || '')
+
+  if (type === 'preapproval' || type === 'subscription_preapproval') {
+    return handleMpPreapprovalWebhook(dataId)
+  }
+  if (type === 'subscription_authorized_payment') {
+    return handleMpAuthorizedPaymentWebhook(dataId)
+  }
+  if (type === 'merchant_order' || type === 'subscription_preapproval_plan') {
+    // Acompanham o fluxo; o pagamento em si chega como outro evento. Ack silencioso.
+    return { success: true, message: null, ignored: type }
+  }
+  // type === 'payment' (ou tópico via query string)
+  return handleMpPaymentWebhook(dataId)
 }
 
 /* ---------------- ROTEADOR ---------------- */
@@ -439,6 +695,12 @@ function doPost(e) {
     if (body.action === 'checkout') {
       log.action = 'checkout'
       result = handleCheckout(body)
+    } else if (body.action === 'subscribe') {
+      log.action = 'subscribe'
+      result = handleSubscribe(body)
+    } else if (body.action === 'cancel_subscription') {
+      log.action = 'cancel_subscription'
+      result = handleCancelSubscription(body)
     } else if (body.action === 'upload' || body.image) {
       log.action = 'upload'
       result = handleUpload(body)
@@ -470,6 +732,6 @@ function doGet() {
     ok: true,
     service: 'vitrinezap',
     provider: provider(),
-    routes: ['checkout', 'upload', 'webhook de pagamento']
+    routes: ['checkout', 'subscribe', 'cancel_subscription', 'upload', 'webhook de pagamento']
   })
 }

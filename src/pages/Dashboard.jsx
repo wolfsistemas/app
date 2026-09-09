@@ -4,8 +4,9 @@ import { useAuth } from '../lib/AuthContext.jsx'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import Brand from '../components/Brand.jsx'
 import PhotoInput from '../components/PhotoInput.jsx'
-import { createCheckout, billingUrl } from '../lib/billing.js'
-import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_DURATION_DAYS, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
+import { cancelSubscription, createCheckout, billingUrl, mpPublicKey } from '../lib/billing.js'
+import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
+import MPBrickModal from '../components/MPBrickModal.jsx'
 
 function beep() {
   try {
@@ -46,10 +47,13 @@ export default function Dashboard() {
   const [copiedLink, setCopiedLink] = useState(false)
   const [toast, setToast] = useState('')
   const [billingBusy, setBillingBusy] = useState(false)
+  const [subBusy, setSubBusy] = useState(false)
+  const [showSubscribe, setShowSubscribe] = useState(false)
   const url = publicUrl(store.slug)
   const isPro = isProStore(store)
   const planEnd = planExpiresAt(store)
   const limitHit = !isPro && products.length >= FREE_PRODUCT_LIMIT
+  const subActive = isPro && store.mp_subscription_status === 'authorized'
   const { id: storeId } = store
   const navigate = useNavigate()
   const location = useLocation()
@@ -115,6 +119,28 @@ export default function Dashboard() {
       setError(err.message || 'Não foi possível abrir o pagamento.')
     } finally {
       setBillingBusy(false)
+    }
+  }
+
+  function onSubscribed() {
+    setShowSubscribe(false)
+    setMsg('Assinatura confirmada! Seu plano está sendo ativado…')
+    window.setTimeout(() => { refresh() }, 2500)
+    window.setTimeout(() => { refresh() }, 6000)
+  }
+
+  async function cancelSub() {
+    if (!window.confirm('Cancelar a assinatura recorrente? Você mantém o Plano Loja até a data já paga e depois volta ao grátis.')) return
+    setError('')
+    setSubBusy(true)
+    try {
+      await cancelSubscription({ storeId })
+      await refresh()
+      setMsg('Assinatura cancelada. Acesso garantido até a data já paga.')
+    } catch (err) {
+      setError(err.message || 'Não foi possível cancelar a assinatura.')
+    } finally {
+      setSubBusy(false)
     }
   }
 
@@ -462,22 +488,38 @@ export default function Dashboard() {
               {isPro ? (
                 <>
                   <span className="chip">Ativo{planEnd ? ` até ${planEnd.toLocaleDateString('pt-BR')}` : ''}</span>
-                  {billingUrl ? (
-                    <button className="btn btn-ghost" disabled={billingBusy} onClick={upgrade}>
-                      {billingBusy ? 'Aguarde...' : 'Renovar / assinar novamente'}
+                  {subActive && (
+                    <button className="btn btn-ghost" disabled={subBusy} onClick={cancelSub}>
+                      {subBusy ? 'Cancelando…' : 'Cancelar assinatura recorrente'}
                     </button>
-                  ) : null}
+                  )}
+                  {billingUrl && (
+                    <button className="btn btn-ghost" disabled={billingBusy} onClick={upgrade}>
+                      {billingBusy ? 'Aguarde...' : 'Pagar mais um mês (avulso)'}
+                    </button>
+                  )}
                 </>
+              ) : billingUrl ? (
+                mpPublicKey ? (
+                  <>
+                    <button className="btn btn-gold" onClick={() => setShowSubscribe(true)}>
+                      Assinar com cartão · {PLAN_PRICE}/mês
+                    </button>
+                    <button className="btn btn-ghost" disabled={billingBusy} onClick={upgrade}>
+                      {billingBusy ? 'Aguarde...' : 'Pagar avulso (Pix/cartão)'}
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn btn-gold" disabled={billingBusy} onClick={upgrade}>
+                    {billingBusy ? 'Aguarde...' : 'Assinar agora'}
+                  </button>
+                )
               ) : (
                 <>
-                  <button className="btn btn-gold" disabled={billingBusy} onClick={upgrade}>
-                    {billingBusy ? 'Aguarde...' : billingUrl ? 'Assinar agora' : 'Ativar neste ambiente'}
-                  </button>
-                  {!billingUrl && (
-                    <p className="help">
-                      Sem cobrança configurada neste ambiente. Para simular, ative o plano aqui.
-                    </p>
-                  )}
+                  <button className="btn btn-gold" onClick={demoActivate}>Ativar neste ambiente</button>
+                  <p className="help">
+                    Sem cobrança configurada neste ambiente. Para simular, ative o plano aqui.
+                  </p>
                 </>
               )}
               {!isPro && !billingUrl && (
@@ -487,14 +529,25 @@ export default function Dashboard() {
                 <p className="help">Ambiente de demonstração: o plano foi ativado manualmente.</p>
               )}
               <p className="help">
-                Pagamento por Pix ou cartão via link seguro. Na confirmação, o plano é liberado
-                automaticamente por {PLAN_DURATION_DAYS} dias via webhook.
+                {mpPublicKey
+                  ? 'No cartão, a cobrança é mensal e automática — sem fidelidade, cancele quando quiser.'
+                  : 'Pagamento por Pix ou cartão via link seguro. Na confirmação, o plano é liberado automaticamente por 30 dias via webhook.'}
               </p>
             </article>
           </section>
         )}
       </main>
       {toast && <div className="toast" onClick={() => setToast('')}>{toast}</div>}
+      {showSubscribe && (
+        <MPBrickModal
+          open={showSubscribe}
+          onClose={() => setShowSubscribe(false)}
+          storeId={storeId}
+          email={user?.email || ''}
+          name={user?.user_metadata?.name || ''}
+          onSuccess={onSubscribed}
+        />
+      )}
     </div>
   )
 }
