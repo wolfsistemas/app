@@ -1,7 +1,7 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import Nav from '../components/Nav.jsx'
-import { money, FREE_PRODUCT_LIMIT } from '../lib/format.js'
+import { money, FREE_PRODUCT_LIMIT, PLAN_PRICE } from '../lib/format.js'
 import { isSupabase } from '../lib/supabase.js'
 import { DEMO_PRODUCTS, DEMO_STORE } from '../lib/seed.js'
 
@@ -84,7 +84,7 @@ export default function Landing() {
             </article>
             <article className="card pad stack" style={{ borderColor: '#c9a227' }}>
               <span className="chip">Loja</span>
-              <h3>R$ 19,90 / mês</h3>
+              <h3>{PLAN_PRICE} / mês</h3>
               <p>Ilimitado, sem nossa marca, PIX no pedido e temas da loja.</p>
               <ul className="muted">
                 <li>Produtos ilimitados (mais que {FREE_PRODUCT_LIMIT})</li>

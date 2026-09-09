@@ -19,10 +19,11 @@
  *   SUPABASE_SERVICE_ROLE   service_role (fica SÓ aqui, nunca no front)
  *   IMGBB_API_KEY           chave ImgBB
  *   UPLOAD_TOKEN            token opcional de upload (igual ao VITE_UPLOAD_TOKEN)
- *   INFINITEPAY_HANDLE      handle do checkout InfinitePay
- *   INFINITEPAY_SECRET      assinatura do webhook (opcional)
+ *   INFINITEPAY_HANDLE      sua InfiniteTag (ex.: maiconvss, sem o $)
  *
  * Deploy: New deployment > Web app > Execute as: Me / Who has access: Anyone.
+ * O webhook do pagamento aponta para a própria URL deste Web App (o GAS usa
+ * ScriptApp.getService().getUrl() como webhook_url no checkout).
  */
 
 var PLAN_DAYS = 30
@@ -88,20 +89,35 @@ function handleCheckout(body) {
   var storeId = String(body.store_id || '')
   if (!storeId) return { ok: false, error: 'store_id ausente' }
 
-  var priceCents = Number(body.price_cents || body.amount_cents || 1990)
+  // Preço SEMPRE em centavos. R$ 9,90 = 990.
+  var priceCents = Number(body.price_cents || body.amount_cents || 990)
+  // order_nsu identifica o pedido no nosso sistema; prefixo com a loja
+  // para o webhook saber quem ativar. Timestamp garante unicidade.
+  var orderNsu = storeId + ':' + Date.now()
+
   var payload = {
-    plan: 'pro',
-    price_cents: priceCents,
-    quantity: 1,
-    store_id: storeId,
-    email: body.email || '',
-    name: body.name || ''
+    handle: handle,
+    order_nsu: orderNsu,
+    redirect_url: body.redirect_url || '',
+    webhook_url: ScriptApp.getService().getUrl(),
+    items: [
+      {
+        quantity: 1,
+        price: priceCents,
+        description: 'Plano Loja VitrineZap (30 dias)'
+      }
+    ]
+  }
+  if (body.name || body.email) {
+    payload.customer = {
+      name: String(body.name || ''),
+      email: String(body.email || '')
+    }
   }
 
   var res = UrlFetchApp.fetch(INFINITEPAY_API, {
     method: 'post',
     contentType: 'application/json',
-    headers: { handle: handle },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   })
@@ -119,7 +135,8 @@ function handleCheckout(body) {
     return {
       ok: false,
       error: parsed.message || parsed.error || 'InfinitePay recusou',
-      status: res.getResponseCode()
+      status: res.getResponseCode(),
+      detail: text
     }
   }
   return { ok: true, url: checkoutUrl }
@@ -149,23 +166,6 @@ function extractStoreId(body) {
   return ''
 }
 
-function signatureOk(body) {
-  var secret = props().getProperty('INFINITEPAY_SECRET')
-  if (!secret) return true
-  var sent = body.__sig || ''
-  if (!sent) return false
-  var expected = Utilities.computeHmacSha256Signature(body.__raw || '', secret)
-    .map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2) })
-    .join('')
-  var a = String(sent).toLowerCase()
-  var b = expected.toLowerCase()
-  var ok = a.length === b.length
-  for (var i = 0; i < a.length; i++) {
-    if (a.charCodeAt(i) !== b.charCodeAt(i)) ok = false
-  }
-  return ok
-}
-
 function activatePlan(storeId) {
   var p = props()
   var url = p.getProperty('SUPABASE_URL')
@@ -192,24 +192,25 @@ function activatePlan(storeId) {
   return { ok: res.getResponseCode() < 300, status: res.getResponseCode() }
 }
 
-function handleWebhook(e, body) {
-  if (body.action === 'upload') return jsonOut(handleUpload(body))
-  var sig = (e.parameter && e.parameter['x-infinitepay-signature']) || (e.parameter && e.parameter.signature) || ''
-  body.__sig = sig
-  if (!signatureOk(body)) {
-    return { ok: false, error: 'Assinatura inválida' }
+function handleWebhook(body) {
+  // Payload real da InfinitePay (sem evento/status no corpo):
+  // { invoice_slug, amount, paid_amount, installments, capture_method,
+  //   transaction_nsu, order_nsu, receipt_url, items }
+  // A InfinitePay chama o webhook quando a venda é confirmada.
+  var storeId = ''
+  var orderNsu = String(body.order_nsu || '')
+  if (orderNsu.indexOf(':') > 0) {
+    storeId = orderNsu.split(':')[0]
   }
-  var status = String(body.event || (body.data && body.data.status) || '')
-  var approved =
-    status.indexOf('approved') !== -1 ||
-    status.indexOf('paid') !== -1 ||
-    status.indexOf('confirmed') !== -1
-  if (!approved) {
-    return { ok: true, ignored: true }
+  if (!storeId) storeId = extractStoreId(body)
+  if (!storeId) {
+    return { success: false, message: 'Loja não identificada no webhook' }
   }
-  var storeId = extractStoreId(body)
-  if (!storeId) return { ok: false, error: 'Loja não identificada no webhook' }
-  return { ok: activatePlan(storeId).ok }
+  var result = activatePlan(storeId)
+  if (!result.ok) {
+    return { success: false, message: 'Falha ao ativar o plano' }
+  }
+  return { success: true, message: null }
 }
 
 /* ---------------- ROTEADOR ---------------- */
@@ -223,7 +224,7 @@ function doPost(e) {
   } else if (body.action === 'upload' || body.image) {
     result = handleUpload(body)
   } else {
-    result = handleWebhook(e, body)
+    result = handleWebhook(body)
   }
   return jsonOut(result)
 }

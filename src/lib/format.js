@@ -1,6 +1,6 @@
 export const FREE_PRODUCT_LIMIT = 8
-export const PLAN_PRICE_CENTS = 1990
-export const PLAN_PRICE = 'R$ 19,90'
+export const PLAN_PRICE_CENTS = 990
+export const PLAN_PRICE = 'R$ 9,90'
 export const PLAN_DURATION_DAYS = 30
 
 export function isProStore(store) {

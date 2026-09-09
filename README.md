@@ -15,7 +15,7 @@ Sem VPS. O browser fala direto com o Supabase.
 
 ## O que já está no MVP
 
-- Landing e planos (grátis / Plano Loja R$ 19,90 por 30 dias)
+- Landing e planos (grátis / Plano Loja R$ 9,90 por 30 dias)
 - Cadastro, login e onboarding da loja
 - Recuperação de senha por e-mail
 - Vitrine pública por slug (`/ana-atelier` é a demo)
@@ -57,11 +57,11 @@ O upload nunca expõe a chave no front:
 ## Assinatura (Plano Loja)
 
 1. O painel mostra o botão de assinar quando `VITE_BILLING_URL` aponta para o GAS (`gas/billing-webhook.js`).
-2. O GAS chama a InfinitePay (`POST /links`, autenticado pelo handle) e devolve a URL do checkout — o valor fica fixo em R$ 19,90/30 dias.
-3. Na confirmação, o webhook da InfinitePay chama o mesmo GAS, que verifica a assinatura e marca `plan = pro` com `plan_expires_at = agora + 30 dias`.
+2. O GAS chama a InfinitePay (`POST /links`) e devolve a URL do checkout — o valor fica fixo em R$ 9,90/30 dias, com `order_nsu` no formato `store_id:timestamp` para o webhook identificar a loja.
+3. Na confirmação, a InfinitePay chama o webhook (a própria URL do GAS, enviada no `webhook_url`), que marca `plan = pro` com `plan_expires_at = agora + 30 dias`.
 4. Sem `VITE_BILLING_URL`, o painel oferece apenas um botão de demonstração (sem cobrança).
 
-Properties do GAS de billing: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `INFINITEPAY_HANDLE`, `INFINITEPAY_SECRET` (opcional).
+Properties do GAS de billing: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `INFINITEPAY_HANDLE` (sua InfiniteTag, ex.: `maiconvss`, sem o `$`).
 
 ## GitHub Pages
 

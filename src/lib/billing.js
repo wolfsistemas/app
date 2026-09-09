@@ -14,14 +14,16 @@ async function postJson(url, payload) {
   return data
 }
 
-// Cria o checkout no servidor (GAS/Edge). O valor é fixado lá (R$ 19,90/30 dias).
+// Cria o checkout no servidor (GAS/Edge). O valor é fixado lá (R$ 9,90/30 dias).
 export async function createCheckout({ storeId, email, name }) {
   if (!billingUrl) throw new Error('Pagamento ainda não configurado neste ambiente.')
+  const redirectUrl = `${window.location.origin}${import.meta.env.BASE_URL}painel?plano=ok`
   const data = await postJson(billingUrl, {
     action: 'checkout',
     store_id: storeId,
     email: email || '',
-    name: name || ''
+    name: name || '',
+    redirect_url: redirectUrl
   })
   return data.url
 }
