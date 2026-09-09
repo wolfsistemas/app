@@ -4,7 +4,7 @@ import { useAuth } from '../lib/AuthContext.jsx'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import Brand from '../components/Brand.jsx'
 import PhotoInput from '../components/PhotoInput.jsx'
-import { cancelSubscription, createCheckout, createSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
+import { cancelSubscription, createCheckout, createSubscription, syncSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
 
 function beep() {
@@ -71,8 +71,21 @@ export default function Dashboard() {
     if (q.get('plano') === 'ok') {
       navigate('/painel', { replace: true })
       setMsg('Pagamento confirmado! Ativando seu plano...')
-      const t1 = setTimeout(() => { refresh() }, 4000)
-      const t2 = setTimeout(() => { refresh() }, 9000)
+      // Ativação imediata via GAS (busca a assinatura na API do MP), sem esperar
+      // o webhook. Repete algumas vezes cobrindo atraso do MP em processar.
+      let tentativas = 0
+      const run = () => {
+        tentativas += 1
+        syncSubscription({ storeId }).then((r) => {
+          if (r && (r.ok || r.status === 'already-active')) refresh()
+          else if (tentativas < 4) setTimeout(run, 4000)
+        }).catch(() => {
+          if (tentativas < 4) setTimeout(run, 4000)
+        })
+      }
+      run()
+      const t1 = setTimeout(() => { refresh() }, 9000)
+      const t2 = setTimeout(() => { refresh() }, 18000)
       return () => {
         clearTimeout(t1)
         clearTimeout(t2)
@@ -138,6 +151,24 @@ export default function Dashboard() {
       window.location.href = url
     } catch (err) {
       setError(err.message || 'Não foi possível gerar o link de assinatura.')
+    } finally {
+      setBillingBusy(false)
+    }
+  }
+
+  async function checkSubscription() {
+    setError('')
+    setBillingBusy(true)
+    try {
+      const r = await syncSubscription({ storeId })
+      if (r && (r.ok || r.status === 'already-active')) {
+        setMsg(r.status === 'already-active' ? 'Plano já está ativo.' : 'Assinatura confirmada! Plano ativado.')
+        await refresh()
+      } else {
+        setError((r && r.error) || 'Nenhuma assinatura ativa encontrada ainda. Tente de novo em instantes.')
+      }
+    } catch (err) {
+      setError(err.message || 'Falha ao verificar assinatura.')
     } finally {
       setBillingBusy(false)
     }
@@ -517,6 +548,9 @@ export default function Dashboard() {
                 <>
                   <button className="btn btn-gold" disabled={billingBusy} onClick={subscribe}>
                     {billingBusy ? 'Gerando link…' : `Assinar · ${PLAN_PRICE}/mês`}
+                  </button>
+                  <button className="btn btn-ghost" disabled={billingBusy} onClick={checkSubscription}>
+                    {billingBusy ? 'Verificando…' : 'Já assinei — verificar'}
                   </button>
                   <button className="btn btn-ghost" disabled={billingBusy} onClick={upgrade}>
                     {billingBusy ? 'Aguarde...' : 'Pagar avulso (Pix/cartão)'}

@@ -65,6 +65,16 @@ export async function cancelSubscription({ storeId }) {
   })
 }
 
+// Rede de segurança: ao voltar do checkout MP (?plano=ok), consulta o GAS, que
+// busca a assinatura autorizada na API do MP e ativa a loja — sem depender do
+// webhook (que pode atrasar ou não chegar no sandbox).
+export async function syncSubscription({ storeId }) {
+  return postBilling({
+    action: 'sync_subscription',
+    store_id: storeId
+  })
+}
+
 export const INFINITEPAY_DEFAULTS = {
   priceCents: PLAN_PRICE_CENTS,
   priceLabel: PLAN_PRICE,

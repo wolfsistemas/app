@@ -437,6 +437,60 @@ function handleSubscribe(body) {
   return handleSubscribeMp(body)
 }
 
+// Rede de segurança: após o usuário voltar do checkout MP (?plano=ok), o front
+// chama este action para ativar a loja SEM depender do webhook. O GAS busca na
+// API do MP a assinatura autorizada vinculada ao mp_plan_id da loja.
+function handleSyncSubscription(body) {
+  var storeId = String(body.store_id || '')
+  if (!storeId) return { ok: false, error: 'store_id ausente' }
+  var token = props().getProperty('MP_ACCESS_TOKEN')
+  if (!token) return { ok: false, error: 'MP_ACCESS_TOKEN ausente no GAS' }
+
+  var row = fetchStore(storeId)
+  if (!row) return { ok: false, error: 'Loja não encontrada' }
+  if (row.plan === 'pro') return { ok: true, status: 'already-active', plan_expires_at: row.plan_expires_at }
+
+  var planId = String(row.mp_plan_id || '')
+  if (!planId) return { ok: false, error: 'mp_plan_id vazio (assine primeiro)' }
+
+  // Busca assinaturas do plano: authorized => 1ª cobrança paga, pode liberar.
+  var res = UrlFetchApp.fetch(
+    'https://api.mercadopago.com/preapproval/search?preapproval_plan_id=' +
+      encodeURIComponent(planId) + '&status=authorized&limit=1',
+    {
+      method: 'get',
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true
+    }
+  )
+  var text = res.getContentText()
+  if (res.getResponseCode() >= 300) {
+    notify('Sync assinatura falhou (loja ' + storeId + ')', text.slice(0, 600))
+    return { ok: false, error: 'Mercado Pago recusou a consulta', status: res.getResponseCode() }
+  }
+  var data = JSON.parse(text || '{}')
+  var results = data.results || []
+  var found = results.length ? results[0] : null
+  if (!found) {
+    return { ok: false, status: 'no-subscription', error: 'Nenhuma assinatura autorizada encontrada no MP' }
+  }
+
+  var subId = String(found.id)
+  patchStore(storeId, {
+    mp_subscription_id: subId,
+    mp_subscription_status: 'authorized'
+  })
+  activatePlan(storeId)
+  var row2 = fetchStore(storeId)
+  notify(
+    'Assinatura ativada (sync) - plano liberado',
+    'Loja: ' + (row2 && (row2.name || row2.slug || row2.id)) + '\n' +
+      'Subscription MP: ' + subId + '\n' +
+      'Validade: ' + (row2 && row2.plan_expires_at)
+  )
+  return { ok: true, status: 'activated', subscription_id: subId, plan_expires_at: row2 && row2.plan_expires_at }
+}
+
 function handleCancelSubscription(body) {
   if (provider() !== 'mp') {
     return { ok: false, error: 'Cancelamento de assinatura exige PAYMENT_PROVIDER=mp no GAS' }
@@ -796,6 +850,9 @@ function doPost(e) {
     } else if (body.action === 'cancel_subscription') {
       log.action = 'cancel_subscription'
       result = handleCancelSubscription(body)
+    } else if (body.action === 'sync_subscription') {
+      log.action = 'sync_subscription'
+      result = handleSyncSubscription(body)
     } else if (body.action === 'upload' || body.image) {
       log.action = 'upload'
       result = handleUpload(body)
@@ -827,6 +884,6 @@ function doGet() {
     ok: true,
     service: 'vitrinezap',
     provider: provider(),
-    routes: ['checkout', 'subscribe', 'cancel_subscription', 'upload', 'webhook de pagamento']
+    routes: ['checkout', 'subscribe', 'cancel_subscription', 'sync_subscription', 'upload', 'webhook de pagamento']
   })
 }
