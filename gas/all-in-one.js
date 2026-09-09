@@ -354,6 +354,7 @@ function ensureMpPlan(storeId, redirectUrl) {
     payload.notification_url &&
     /notification[_\s]?url/i.test(text)
   ) {
+    notify('MP recusou notification_url; plano sera criado SEM webhook', text.slice(0, 600))
     var fallback = JSON.parse(JSON.stringify(payload))
     delete fallback.notification_url
     res = mpCreatePlan(token, fallback)
@@ -612,6 +613,14 @@ function fetchMpAuthorizedPayment(authId) {
   return mpFetch('/authorized_payments/' + encodeURIComponent(authId))
 }
 
+// Recurso notificado nao existe (404) — evento de simulacao do painel do MP ou
+// objeto apagado/antigo. Nao e pagamento real nosso: ack 200 silencioso (sem
+// e-mail de erro e sem retry em loop). Retorna true quando deve ser ignorado.
+function isNotFound(err) {
+  var msg = String((err && err.message) || err)
+  return /404/.test(msg) || /not found/i.test(msg)
+}
+
 // Resolve a loja de um evento MP. Ordem: external_reference (avulso/1x) ->
 // preapproval_plan_id (assinatura hospedada) -> preapproval (se só tiver o id).
 // external_reference 'plan:<mpPlanId>' não vira store por prefixo: o plano do MP
@@ -654,7 +663,13 @@ function handleMpApprovedPayment(paymentId, payment) {
 }
 
 function handleMpPaymentWebhook(paymentId) {
-  var payment = fetchMpPayment(paymentId)
+  var payment
+  try {
+    payment = fetchMpPayment(paymentId)
+  } catch (err) {
+    if (isNotFound(err)) return { success: true, message: null, status: 'not-found' }
+    throw err
+  }
   var status = String(payment.status || '')
   if (status !== 'approved') {
     // Pagamento ainda não aprovado (created/pending/rejected): ack silencioso.
@@ -673,7 +688,13 @@ function handleMpPreapprovalWebhook(subId) {
     notify('Webhook MP preapproval sem id', '')
     throw new Error('Webhook preapproval sem id')
   }
-  var pre = fetchMpPreapproval(subId)
+  var pre
+  try {
+    pre = fetchMpPreapproval(subId)
+  } catch (err) {
+    if (isNotFound(err)) return { success: true, message: null, status: 'not-found' }
+    throw err
+  }
   var status = String(pre.status || '')
   var storeId = resolveStoreForMp(String(pre.external_reference || ''), pre.preapproval_plan_id, subId)
   if (!storeId) {
@@ -713,7 +734,13 @@ function handleMpAuthorizedPaymentWebhook(authId) {
     notify('Webhook MP authorized_payment sem id', '')
     throw new Error('Webhook authorized_payment sem id')
   }
-  var auth = fetchMpAuthorizedPayment(authId)
+  var auth
+  try {
+    auth = fetchMpAuthorizedPayment(authId)
+  } catch (err) {
+    if (isNotFound(err)) return { success: true, message: null, status: 'not-found' }
+    throw err
+  }
   var ext = String(auth.external_reference || '')
   var storeId = resolveStoreForMp(ext, auth.preapproval_plan_id, auth.preapproval_id)
   if (!storeId) {
