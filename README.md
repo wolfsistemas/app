@@ -8,7 +8,7 @@ O cliente abre o link da bio, escolhe as peças e o pedido cai formatado no zap 
 
 - Front estático (Vite + React) no GitHub Pages / Cloudflare Pages
 - Auth, Postgres e Realtime no **Supabase**
-- Pagamento e webhook de plano: **InfinitePay** + **Google Apps Script**
+- Pagamento e webhook de plano: **InfinitePay** ou **Mercado Pago** (troca por property no GAS) + **Google Apps Script**
 - PWA instalável + analytics leve (Umami)
 
 Sem VPS. O browser fala direto com o Supabase.
@@ -24,7 +24,7 @@ Sem VPS. O browser fala direto com o Supabase.
 - Painel: produtos, pedidos (tempo real com som), tema, PIX, plano
 - Limite de 8 produtos no plano grátis
 - Marca VitrineZap no rodapé do plano free (removida no Loja)
-- Checkout InfinitePay + expiração de plano por webhook
+- Checkout via link (InfinitePay / Mercado Pago) + expiração de plano por webhook
 
 ## Como rodar
 
@@ -56,12 +56,19 @@ O upload nunca expõe a chave no front:
 
 ## Assinatura (Plano Loja)
 
-1. O painel mostra o botão de assinar quando `VITE_BILLING_URL` aponta para o GAS (`gas/billing-webhook.js`).
-2. O GAS chama a InfinitePay (`POST /links`) e devolve a URL do checkout — o valor fica fixo em R$ 9,90/30 dias, com `order_nsu` no formato `store_id:timestamp` para o webhook identificar a loja.
-3. Na confirmação, a InfinitePay chama o webhook (a própria URL do GAS, enviada no `webhook_url`), que marca `plan = pro` com `plan_expires_at = agora + 30 dias`.
+1. O painel mostra o botão de assinar quando `VITE_BILLING_URL` aponta para o GAS (`gas/all-in-one.js`).
+2. O GAS cria o link de pagamento e devolve a URL do checkout — o valor fica fixo em R$ 9,90/30 dias, com `order_nsu` no formato `store_id:timestamp` para o webhook identificar a loja.
+3. Na confirmação, o provedor chama o webhook (a própria URL do GAS), que marca `plan = pro` com `plan_expires_at = agora + 30 dias` e confirma lendo a loja de volta.
 4. Sem `VITE_BILLING_URL`, o painel oferece apenas um botão de demonstração (sem cobrança).
 
-Properties do GAS de billing: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `INFINITEPAY_HANDLE` (sua InfiniteTag, ex.: `maiconvss`, sem o `$`).
+### Trocar o provedor (sem mexer no app)
+
+No GAS, mude a property `PAYMENT_PROVIDER` (e crie nova versão do deploy):
+
+- `infinitepay` (padrão) — usa `INFINITEPAY_HANDLE` (sua InfiniteTag, ex.: `maiconvss`, sem o `$`)
+- `mp` — usa `MP_ACCESS_TOKEN` (Access Token do Mercado Pago); opcional `MP_USE_SANDBOX=true` para testar em sandbox
+
+Properties comuns: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `EMAIL_LOG` (padrão: wolfsaasbr@gmail.com).
 
 ## GitHub Pages
 

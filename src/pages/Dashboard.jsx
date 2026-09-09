@@ -37,7 +37,7 @@ const TABS = [
 ]
 
 export default function Dashboard() {
-  const { user, store, products, orders, saveStore, saveProduct, deleteProduct, updateOrder, addOrder, applyOrderPatch, signOut } = useAuth()
+  const { user, store, products, orders, saveStore, saveProduct, deleteProduct, updateOrder, addOrder, applyOrderPatch, signOut, refresh } = useAuth()
   const [tab, setTab] = useState('produtos')
   const [form, setForm] = useState(store)
   const [product, setProduct] = useState(null)
@@ -58,8 +58,15 @@ export default function Dashboard() {
     const q = new URLSearchParams(location.search)
     if (q.get('plano') === 'ok') {
       navigate('/painel', { replace: true })
-      setMsg('Pagamento recebido! Seu plano já está ativo.')
+      setMsg('Pagamento confirmado! Ativando seu plano...')
+      const t1 = setTimeout(() => { refresh() }, 4000)
+      const t2 = setTimeout(() => { refresh() }, 9000)
+      return () => {
+        clearTimeout(t1)
+        clearTimeout(t2)
+      }
     }
+    return undefined
   }, [location.search])
 
   useEffect(() => {
@@ -480,7 +487,7 @@ export default function Dashboard() {
                 <p className="help">Ambiente de demonstração: o plano foi ativado manualmente.</p>
               )}
               <p className="help">
-                Pagamento processado pela InfinitePay (Pix ou cartão). Na confirmação, o plano é liberado
+                Pagamento por Pix ou cartão via link seguro. Na confirmação, o plano é liberado
                 automaticamente por {PLAN_DURATION_DAYS} dias via webhook.
               </p>
             </article>

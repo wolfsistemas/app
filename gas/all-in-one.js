@@ -10,25 +10,34 @@
  * gas/billing-webhook.js (cada um com sua própria URL).
  *
  * Roteamento automático:
- *   POST { action: "checkout", ... } -> gera link InfinitePay
+ *   POST { action: "checkout", ... } -> gera link de pagamento
  *   POST { image, ... }             -> upload ImgBB
- *   POST evento da InfinitePay       -> ativa/renova o plano no Supabase
+ *   POST evento de pagamento         -> ativa/renova o plano no Supabase
+ *
+ * PROVEDOR DE PAGAMENTO (troque sem mexer no app):
+ *   PAYMENT_PROVIDER = infinitepay  (padrão atual, InfinitePay)
+ *   PAYMENT_PROVIDER = mp           (Mercado Pago, Checkout Pro)
  *
  * Configuração (Project Settings > Script properties):
  *   SUPABASE_URL            https://xxxx.supabase.co
  *   SUPABASE_SERVICE_ROLE   service_role (fica SÓ aqui, nunca no front)
  *   IMGBB_API_KEY           chave ImgBB
  *   UPLOAD_TOKEN            token opcional de upload (igual ao VITE_UPLOAD_TOKEN)
- *   INFINITEPAY_HANDLE      sua InfiniteTag (ex.: maiconvss, sem o $)
+ *
+ *   PAYMENT_PROVIDER        infinitepay | mp
+ *   INFINITEPAY_HANDLE      sua InfiniteTag (ex.: maiconvss, sem o $)  [provider infinitepay]
+ *   MP_ACCESS_TOKEN         Access Token do Mercado Pago               [provider mp]
+ *   MP_USE_SANDBOX          true para usar sandbox_init_point          [provider mp, opcional]
+ *
  *   EMAIL_LOG               e-mail que recebe os logs (padrão: wolfsaasbr@gmail.com)
  *
  * Deploy: New deployment > Web app > Execute as: Me / Who has access: Anyone.
- * O webhook do pagamento aponta para a própria URL deste Web App (o GAS usa
- * ScriptApp.getService().getUrl() como webhook_url no checkout).
+ * O webhook de pagamento aponta para a própria URL deste Web App (o GAS usa
+ * ScriptApp.getService().getUrl() como notification/webhook_url).
  */
 
 var PLAN_DAYS = 30
-var INFINITEPAY_API = 'https://api.checkout.infinitepay.io/links'
+var PLAN_TITLE = 'Plano Loja VitrineZap (30 dias)'
 var DEFAULT_LOG_EMAIL = 'wolfsaasbr@gmail.com'
 
 function jsonOut(obj) {
@@ -37,6 +46,14 @@ function jsonOut(obj) {
 
 function props() {
   return PropertiesService.getScriptProperties()
+}
+
+function provider() {
+  return String(props().getProperty('PAYMENT_PROVIDER') || 'infinitepay').toLowerCase().trim()
+}
+
+function planExpiresAt() {
+  return new Date(Date.now() + PLAN_DAYS * 86400000).toISOString()
 }
 
 /* ---------------- LOG por e-mail ---------------- */
@@ -66,9 +83,7 @@ function parseQueryString(qs) {
   qs.split('&').forEach(function (pair) {
     var i = pair.indexOf('=')
     if (i < 0) return
-    var key = decodeURIComponent(pair.slice(0, i))
-    var val = decodeURIComponent(pair.slice(i + 1))
-    out[key] = val
+    out[decodeURIComponent(pair.slice(0, i))] = decodeURIComponent(pair.slice(i + 1))
   })
   return out
 }
@@ -79,7 +94,6 @@ function parseBody(e) {
   try {
     body = JSON.parse(raw)
   } catch (err) {
-    // Se não for JSON, tenta como formulário (por garantia)
     body = parseQueryString(raw)
     body.__parsed_as = 'query'
   }
@@ -117,7 +131,7 @@ function handleUpload(body) {
 
 /* ---------------- CHECKOUT InfinitePay ---------------- */
 
-function handleCheckout(body) {
+function handleCheckoutInfinite(body) {
   var handle = props().getProperty('INFINITEPAY_HANDLE')
   if (!handle) {
     return { ok: false, error: 'INFINITEPAY_HANDLE ausente no GAS' }
@@ -126,10 +140,7 @@ function handleCheckout(body) {
   var storeId = String(body.store_id || '')
   if (!storeId) return { ok: false, error: 'store_id ausente' }
 
-  // Preço SEMPRE em centavos. R$ 9,90 = 990.
   var priceCents = Number(body.price_cents || body.amount_cents || 990)
-  // order_nsu identifica o pedido no nosso sistema; prefixo com a loja
-  // para o webhook saber quem ativar. Timestamp garante unicidade.
   var orderNsu = storeId + ':' + Date.now()
 
   var payload = {
@@ -141,7 +152,7 @@ function handleCheckout(body) {
       {
         quantity: 1,
         price: priceCents,
-        description: 'Plano Loja VitrineZap (30 dias)'
+        description: PLAN_TITLE
       }
     ]
   }
@@ -152,7 +163,7 @@ function handleCheckout(body) {
     }
   }
 
-  var res = UrlFetchApp.fetch(INFINITEPAY_API, {
+  var res = UrlFetchApp.fetch('https://api.checkout.infinitepay.io/links', {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
@@ -179,14 +190,82 @@ function handleCheckout(body) {
   return { ok: true, url: checkoutUrl, order_nsu: orderNsu }
 }
 
-/* ---------------- ATIVAÇÃO do plano ---------------- */
+/* ---------------- CHECKOUT Mercado Pago (Checkout Pro) ---------------- */
 
-function restHeaders(serviceKey) {
-  return {
-    apikey: serviceKey,
-    Authorization: 'Bearer ' + serviceKey
+function handleCheckoutMp(body) {
+  var token = props().getProperty('MP_ACCESS_TOKEN')
+  if (!token) {
+    return { ok: false, error: 'MP_ACCESS_TOKEN ausente no GAS' }
   }
+
+  var storeId = String(body.store_id || '')
+  if (!storeId) return { ok: false, error: 'store_id ausente' }
+
+  var priceCents = Number(body.price_cents || body.amount_cents || 990)
+  var unitPrice = priceCents / 100 // MP usa reais (float), não centavos
+  var orderNsu = storeId + ':' + Date.now()
+  var redirect = body.redirect_url || ''
+  var webhook = ScriptApp.getService().getUrl()
+
+  var payload = {
+    items: [
+      {
+        title: PLAN_TITLE,
+        quantity: 1,
+        unit_price: unitPrice,
+        currency_id: 'BRL'
+      }
+    ],
+    external_reference: orderNsu,
+    notification_url: webhook,
+    back_urls: {
+      success: redirect,
+      pending: redirect,
+      failure: redirect
+    },
+    auto_return: 'approved',
+    statement_descriptor: 'VITRINEZAP'
+  }
+  if (body.name || body.email) {
+    payload.payer = {
+      name: String(body.name || ''),
+      email: String(body.email || ''),
+      identification: {}
+    }
+  }
+
+  var res = UrlFetchApp.fetch('https://api.mercadopago.com/checkout/preferences', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  })
+  var text = res.getContentText()
+  var parsed = {}
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) { /* resposta não-JSON */ }
+
+  var sandbox = String(props().getProperty('MP_USE_SANDBOX') || '').toLowerCase() === 'true'
+  var checkoutUrl = sandbox ? parsed.sandbox_init_point : (parsed.init_point || parsed.sandbox_init_point)
+  if (res.getResponseCode() >= 300 || !checkoutUrl) {
+    notify('Falha ao gerar checkout MP (loja ' + storeId + ')', text)
+    return {
+      ok: false,
+      error: parsed.message || parsed.error || 'Mercado Pago recusou',
+      status: res.getResponseCode()
+    }
+  }
+  return { ok: true, url: checkoutUrl, order_nsu: orderNsu }
 }
+
+function handleCheckout(body) {
+  if (provider() === 'mp') return handleCheckoutMp(body)
+  return handleCheckoutInfinite(body)
+}
+
+/* ---------------- ATIVAÇÃO do plano ---------------- */
 
 function fetchStore(storeId) {
   var p = props()
@@ -199,7 +278,7 @@ function fetchStore(storeId) {
     url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId) + '&select=id,slug,plan,plan_expires_at,name',
     {
       method: 'get',
-      headers: restHeaders(serviceKey),
+      headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey },
       muteHttpExceptions: true
     }
   )
@@ -218,7 +297,6 @@ function activatePlan(storeId) {
   if (!url || !serviceKey) {
     throw new Error('SUPABASE_URL/SERVICE_ROLE ausentes no GAS')
   }
-  var expires = new Date(Date.now() + PLAN_DAYS * 86400000).toISOString()
   var res = UrlFetchApp.fetch(url + '/rest/v1/stores?id=eq.' + encodeURIComponent(storeId), {
     method: 'patch',
     contentType: 'application/json',
@@ -229,16 +307,13 @@ function activatePlan(storeId) {
     },
     payload: JSON.stringify({
       plan: 'pro',
-      plan_expires_at: expires
+      plan_expires_at: planExpiresAt()
     }),
     muteHttpExceptions: true
   })
-  var code = res.getResponseCode()
-  if (code >= 300) {
-    var text = res.getContentText()
-    throw new Error('PATCH stores falhou (' + code + '): ' + text.slice(0, 500))
+  if (res.getResponseCode() >= 300) {
+    throw new Error('PATCH stores falhou (' + res.getResponseCode() + '): ' + res.getContentText().slice(0, 500))
   }
-  return expires
 }
 
 function resolveStoreFromOrderNsu(orderNsu) {
@@ -247,29 +322,13 @@ function resolveStoreFromOrderNsu(orderNsu) {
   return s
 }
 
-/* ---------------- WEBHOOK de pagamento ---------------- */
-
-function handleWebhook(body) {
-  // Payload real da InfinitePay (sem evento/status no corpo):
-  // { invoice_slug, amount, paid_amount, installments, capture_method,
-  //   transaction_nsu, order_nsu, receipt_url, items }
-  var orderNsu = String(body.order_nsu || '')
-  var storeId = resolveStoreFromOrderNsu(orderNsu) || String(body.store_id || '')
-
-  if (!storeId) {
-    notify('Webhook sem loja identificada', JSON.stringify(body, null, 2))
-    throw new Error('Loja não identificada no webhook')
-  }
-
-  // Ativa e confirma com uma nova leitura (se falhar, lança 500 -> InfinitePay reenvia)
-  var expires = activatePlan(storeId)
+function confirmPlan(storeId, orderNsu, body, capture, amount, receipt) {
+  activatePlan(storeId)
   var row = fetchStore(storeId)
   if (!row || row.plan !== 'pro') {
-    var dump = 'order_nsu=' + orderNsu + '\nstoreId=' + storeId + '\nrow=' + JSON.stringify(row)
-    notify('ATENÇÃO: plano não confirmado como pro', dump)
+    notify('ATENÇÃO: plano não confirmado como pro', 'order_nsu=' + orderNsu + '\nstoreId=' + storeId + '\nrow=' + JSON.stringify(row))
     throw new Error('Plano não confirmado como pro')
   }
-
   notify(
     'Pagamento recebido - plano ativado',
     'Venda efetuada e paga!\n\n' +
@@ -277,12 +336,91 @@ function handleWebhook(body) {
       'Plano: Loja\n' +
       'Validade: ' + row.plan_expires_at + '\n' +
       'order_nsu: ' + orderNsu + '\n' +
-      'transaction_nsu: ' + (body.transaction_nsu || '-') + '\n' +
-      'capture_method: ' + (body.capture_method || '-') + '\n' +
-      'amount: ' + (body.amount || '-') + '\n' +
-      'receipt_url: ' + (body.receipt_url || '-')
+      'transaction: ' + String(body.transaction_nsu || body.payment_id || body.id || '-') + '\n' +
+      'capture_method: ' + capture + '\n' +
+      'amount: ' + amount + '\n' +
+      'receipt: ' + (receipt || '-')
   )
+}
 
+/* ---------------- WEBHOOK InfinitePay ---------------- */
+
+function handleInfiniteWebhook(body) {
+  var orderNsu = String(body.order_nsu || '')
+  var storeId = resolveStoreFromOrderNsu(orderNsu) || String(body.store_id || '')
+  if (!storeId) {
+    notify('Webhook sem loja identificada', JSON.stringify(body, null, 2))
+    throw new Error('Loja não identificada no webhook')
+  }
+  confirmPlan(storeId, orderNsu, body, body.capture_method || '-', body.amount || '-', body.receipt_url)
+  return { success: true, message: null }
+}
+
+/* ---------------- WEBHOOK Mercado Pago ---------------- */
+
+function isMpWebhook(e, body) {
+  if (body.type === 'payment' || (body.data && body.data.id)) return true
+  return (e.parameter && e.parameter.topic === 'payment')
+}
+
+function mpProcessed(id) {
+  var KEY = 'MP_PROCESSED'
+  var list = []
+  try {
+    list = JSON.parse(props().getProperty(KEY) || '[]')
+  } catch (err) { list = [] }
+  if (list.indexOf(id) !== -1) return true
+  list.push(id)
+  if (list.length > 80) list = list.slice(-80)
+  props().setProperty(KEY, JSON.stringify(list))
+  return false
+}
+
+function fetchMpPayment(paymentId) {
+  var token = props().getProperty('MP_ACCESS_TOKEN')
+  if (!token) throw new Error('MP_ACCESS_TOKEN ausente no GAS')
+  var res = UrlFetchApp.fetch('https://api.mercadopago.com/v1/payments/' + encodeURIComponent(paymentId), {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + token },
+    muteHttpExceptions: true
+  })
+  var text = res.getContentText()
+  if (res.getResponseCode() >= 300) {
+    throw new Error('GET payment MP falhou (' + res.getResponseCode() + '): ' + text.slice(0, 300))
+  }
+  return JSON.parse(text || '{}')
+}
+
+function handleMpWebhook(e, body) {
+  var paymentId = String((body.data && body.data.id) || (e.parameter && e.parameter.id) || '')
+  if (!paymentId) {
+    notify('Webhook MP sem payment id', JSON.stringify(body, null, 2))
+    throw new Error('Webhook MP sem payment id')
+  }
+
+  var payment = fetchMpPayment(paymentId)
+  var status = String(payment.status || '')
+  if (status !== 'approved') {
+    // Pagamento ainda não aprovado (created/pending): ack silencioso.
+    return { success: true, message: null, status: status }
+  }
+
+  // Ativa só na 1ª notificação aprovada por payment; as demais viram ack.
+  if (mpProcessed(paymentId)) {
+    return { success: true, message: null, already: true }
+  }
+
+  var orderNsu = String(payment.external_reference || body.external_reference || '')
+  var storeId = resolveStoreFromOrderNsu(orderNsu)
+  if (!storeId) {
+    notify('Webhook MP aprovado sem loja', JSON.stringify(payment, null, 2))
+    throw new Error('Loja não identificada no pagamento aprovado')
+  }
+
+  var amount = (payment.transaction_amount || payment.transaction_details && payment.transaction_details.total_paid_amount)
+  var capture = payment.payment_method_id || payment.payment_type_id || '-'
+  var receipt = (payment.transaction_details && payment.transaction_details.external_resource_url) || ''
+  confirmPlan(storeId, orderNsu, { payment_id: paymentId }, capture, amount, receipt)
   return { success: true, message: null }
 }
 
@@ -293,6 +431,7 @@ function doPost(e) {
   var log = {
     at: new Date().toISOString(),
     action: 'desconhecida',
+    provider: provider(),
     keys: Object.keys(body).slice(0, 25)
   }
   try {
@@ -303,9 +442,12 @@ function doPost(e) {
     } else if (body.action === 'upload' || body.image) {
       log.action = 'upload'
       result = handleUpload(body)
+    } else if (isMpWebhook(e, body)) {
+      log.action = 'webhook_mp'
+      result = handleMpWebhook(e, body)
     } else {
-      log.action = 'webhook'
-      result = handleWebhook(body)
+      log.action = 'webhook_infinitepay'
+      result = handleInfiniteWebhook(body)
     }
     log.result = result
     safeLog(log)
@@ -318,7 +460,7 @@ function doPost(e) {
     log.error = String((err && err.stack) || err)
     safeLog(log)
     notify('Erro em ' + log.action + ' - ' + String((err && err.message) || err), JSON.stringify(log, null, 2))
-    // HTTP 500 (erro real no Apps Script) -> InfinitePay tenta reenviar o webhook
+    // HTTP 500 (erro real no Apps Script) -> provedor tenta reenviar o webhook
     throw err
   }
 }
@@ -327,6 +469,7 @@ function doGet() {
   return jsonOut({
     ok: true,
     service: 'vitrinezap',
+    provider: provider(),
     routes: ['checkout', 'upload', 'webhook de pagamento']
   })
 }
