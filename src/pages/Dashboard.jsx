@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext.jsx'
 import { isSupabase, supabase } from '../lib/supabase.js'
@@ -39,6 +39,31 @@ const TABS = [
   ['plano', 'Plano']
 ]
 
+const ORDER_STATUS = {
+  novo: 'Novo',
+  preparando: 'Em preparo',
+  enviado: 'Enviado',
+  entregue: 'Entregue',
+  atendido: 'Atendido',
+  cancelado: 'Cancelado'
+}
+const ORDER_STATUS_ORDER = ['novo', 'preparando', 'enviado', 'entregue', 'cancelado']
+
+function nextStatus(status) {
+  if (status === 'novo' || status === 'atendido') return { to: 'preparando', label: 'Aceitar pedido' }
+  if (status === 'preparando') return { to: 'enviado', label: 'Marcar como enviado' }
+  if (status === 'enviado') return { to: 'entregue', label: 'Confirmar entrega' }
+  return null
+}
+
+function paymentInfo(o) {
+  if (o.payment_status === 'paid') return { label: 'Pago', tone: 'ok' }
+  if (o.payment_status === 'failed') return { label: 'Não pago', tone: 'bad' }
+  if (o.payment_status === 'refunded') return { label: 'Estornado', tone: 'bad' }
+  if (o.payment_method === 'pix') return { label: 'Aguardando Pix', tone: 'wait' }
+  return { label: 'Manual', tone: 'wait' }
+}
+
 export default function Dashboard() {
   const { user, store, products, orders, saveStore, saveProduct, deleteProduct, updateOrder, addOrder, applyOrderPatch, signOut, refresh } = useAuth()
   const [tab, setTab] = useState('produtos')
@@ -48,6 +73,7 @@ export default function Dashboard() {
   const [error, setError] = useState('')
   const [copiedLink, setCopiedLink] = useState(false)
   const showToast = useToast()
+  const paidSeen = useRef(new Set())
   const [billingBusy, setBillingBusy] = useState(false)
   const [subBusy, setSubBusy] = useState(false)
   const [mpBusy, setMpBusy] = useState(false)
@@ -135,7 +161,15 @@ export default function Dashboard() {
         table: 'orders',
         filter: `store_id=eq.${storeId}`
       }, (payload) => {
-        applyOrderPatch(payload.new.id, payload.new)
+        const row = payload.new
+        if (!row) return
+        applyOrderPatch(row.id, row)
+        if (row.payment_status === 'paid' && row.mp_payment_id && !paidSeen.current.has(row.mp_payment_id)) {
+          paidSeen.current.add(row.mp_payment_id)
+          beep()
+          const code = String(row.code || '').padStart(3, '0')
+          showToast(`Pagamento confirmado · Pedido nº ${code} · ${money(row.total)}`, 'ok', 8000)
+        }
       })
       .subscribe()
     return () => {
@@ -503,24 +537,41 @@ export default function Dashboard() {
             {orders.length > 0 && (
               <table className="table">
               <thead>
-                <tr><th>Quando</th><th>Cliente</th><th>Itens</th><th>Total</th><th></th></tr>
+                <tr><th>Quando</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Pagamento</th><th>Situação</th><th>Ação</th></tr>
               </thead>
               <tbody>
-                {orders.map((o) => (
-                  <tr key={o.id}>
-                    <td>{timeAgo(o.created_at)}</td>
-                    <td>{o.customer_name || 'Cliente'}</td>
-                    <td>{(o.items || []).map((i) => `${i.qty}x ${i.name}`).join(', ')}</td>
-                    <td>{money(o.total)}</td>
-                    <td>
-                      <select value={o.status} onChange={(e) => updateOrder(o.id, { status: e.target.value })}>
-                        <option value="novo">Novo</option>
-                        <option value="atendido">Atendido</option>
-                        <option value="cancelado">Cancelado</option>
-                      </select>
-                    </td>
-                  </tr>
-                ))}
+                {orders.map((o) => {
+                  const pay = paymentInfo(o)
+                  const next = nextStatus(o.status)
+                  return (
+                    <tr key={o.id}>
+                      <td>{timeAgo(o.created_at)}</td>
+                      <td>{o.customer_name || 'Cliente'}</td>
+                      <td>{(o.items || []).map((i) => `${i.qty}x ${i.name}`).join(', ')}</td>
+                      <td>{money(o.total)}</td>
+                      <td><span className={`chip status-${pay.tone}`}>{pay.label}</span></td>
+                      <td>
+                        <select value={o.status} onChange={(e) => updateOrder(o.id, { status: e.target.value })}>
+                          {!ORDER_STATUS_ORDER.includes(o.status) && (
+                            <option value={o.status}>{ORDER_STATUS[o.status] || o.status}</option>
+                          )}
+                          {ORDER_STATUS_ORDER.map((s) => (
+                            <option key={s} value={s}>{ORDER_STATUS[s]}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        {next ? (
+                          <button type="button" className="btn btn-dark" onClick={() => updateOrder(o.id, { status: next.to })}>
+                            {next.label}
+                          </button>
+                        ) : (
+                          <span className="help">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
             )}
