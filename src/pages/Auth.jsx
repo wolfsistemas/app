@@ -14,8 +14,6 @@ export default function Auth({ mode }) {
   const [ok, setOk] = useState('')
   const [busy, setBusy] = useState(false)
 
-  if (user) return <Navigate to={store ? '/painel' : '/comecar'} replace />
-
   useEffect(() => {
     if (recovering) {
       setView('recover')
@@ -28,6 +26,8 @@ export default function Auth({ mode }) {
       setView('recover')
     }
   }, [recovering, isSupabase, signup])
+
+  if (user) return <Navigate to={store ? '/painel' : '/comecar'} replace />
 
   async function onSubmit(e) {
     e.preventDefault()
