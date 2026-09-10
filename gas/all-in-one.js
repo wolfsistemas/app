@@ -611,7 +611,9 @@ function sendPush(storeId, title, body, url) {
     })
     if (res.getResponseCode() >= 300) {
       notify('Falha ao enviar push (loja ' + storeId + ')', res.getContentText().slice(0, 400))
-      return { ok: false, error: 'push http ' + res.getResponseCode() }
+      var detail = ''
+      try { detail = JSON.parse(res.getContentText()).detail || JSON.parse(res.getContentText()).error || '' } catch (e) {}
+      return { ok: false, error: 'push http ' + res.getResponseCode() + (detail ? ': ' + detail : '') }
     }
     return { ok: true }
   } catch (err) {

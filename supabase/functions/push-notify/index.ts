@@ -26,7 +26,22 @@ Deno.serve(async (req) => {
 
   const secret = req.headers.get('x-push-secret') || ''
   const expected = Deno.env.get('PUSH_SECRET') || ''
-  if (!expected || secret !== expected) return json({ ok: false, error: 'unauthorized' }, 401)
+  if (!expected || secret !== expected) {
+    console.error('push unauthorized', {
+      hasExpected: Boolean(expected),
+      expectedLen: expected.length,
+      secretLen: secret.length,
+      match: secret === expected
+    })
+    return json(
+      {
+        ok: false,
+        error: 'unauthorized',
+        detail: !expected ? 'PUSH_SECRET nao configurado no Supabase' : 'PUSH_SECRET diferente do GAS'
+      },
+      401
+    )
+  }
 
   const publicKey = Deno.env.get('VAPID_PUBLIC_KEY') || ''
   const privateKey = Deno.env.get('VAPID_PRIVATE_KEY') || ''
@@ -58,6 +73,7 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: 'supabase ' + listRes.status, detail: text.slice(0, 300) }, 500)
   }
   const rows: Array<{ id: string; endpoint: string; p256dh: string; auth: string }> = await listRes.json()
+  console.log('push send', { storeId, subs: rows.length })
   if (!rows.length) return json({ ok: true, sent: 0, removed: 0, note: 'sem assinaturas' })
 
   const payload = JSON.stringify({
@@ -81,6 +97,7 @@ Deno.serve(async (req) => {
         sent += 1
       } catch (err) {
         const status = (err as { statusCode?: number })?.statusCode
+        console.error('push falhou', { status, body: String((err as { body?: string })?.body || '').slice(0, 200) })
         if (status === 404 || status === 410) {
           dead.push(row.endpoint)
           removed += 1
