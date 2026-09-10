@@ -139,12 +139,18 @@ export function AuthProvider({ children }) {
         const { data } = await supabase.auth.getUser()
         await loadSupabase(data.user)
       },
-      async signUp({ email, password, name }) {
+      async signUp({ email, password, name, terms }) {
         if (isSupabase) {
           const { data, error } = await supabase.auth.signUp({
             email,
             password,
-            options: { data: { name } }
+            options: {
+              data: {
+                name,
+                terms_accepted_at: terms?.at || null,
+                terms_version: terms?.version || null
+              }
+            }
           })
           if (error) throw error
           if (!data.session) {
@@ -155,7 +161,7 @@ export function AuthProvider({ children }) {
         }
         const existing = localDb.get().users.find((u) => u.email === email)
         if (existing) throw new Error('Esse e-mail já está cadastrado.')
-        const next = { id: uid('user'), email, password, name }
+        const next = { id: uid('user'), email, password, name, terms_accepted_at: terms?.at || null, terms_version: terms?.version || null }
         localDb.upsertUser(next)
         await loadLocal(next)
         return next

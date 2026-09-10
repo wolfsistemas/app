@@ -1,6 +1,7 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import Nav from '../components/Nav.jsx'
+import Footer from '../components/Footer.jsx'
 import { money, FREE_PRODUCT_LIMIT, PLAN_PRICE } from '../lib/format.js'
 import { isSupabase } from '../lib/supabase.js'
 import { DEMO_PRODUCTS, DEMO_STORE } from '../lib/seed.js'
@@ -97,12 +98,7 @@ export default function Landing() {
           </div>
         </section>
       </main>
-      <footer className="footer">
-        <div className="wrap between">
-          <span>VitrineZap · catálogo + bio link para quem vende no WhatsApp</span>
-          <span className="tiny">Hospedado no GitHub · dados no Supabase</span>
-        </div>
-      </footer>
+      <Footer />
     </>
   )
 }

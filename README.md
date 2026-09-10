@@ -170,6 +170,27 @@ Script Properties: `PUSH_FUNCTION_URL` (URL da Edge Function) e `PUSH_SECRET` (o
 - No checkout do PWA, a permissão é por aparelho; ative em cada um que quiser receber.
 - Se parar de chegar, desative e ative de novo no painel.
 
+## Legal, suporte e marca
+
+Antes de vender, preencha os dados da empresa e do suporte (variáveis públicas, vão para o bundle):
+
+- `VITE_COMPANY_NAME` — nome que aparece no rodapé e nos Termos.
+- `VITE_COMPANY_DOC` — CNPJ ou CPF (vazio esconde).
+- `VITE_COMPANY_CITY` — cidade/UF.
+- `VITE_SUPPORT_EMAIL` — e-mail de suporte (rodapé e páginas legais).
+- `VITE_SUPPORT_WHATSAPP` — só dígitos com DDI (ex.: `5511999999999`); vazio esconde o botão.
+
+O que já existe no app:
+
+- Páginas **`/termos`** e **`/privacidade`** (rotas dedicadas, com rodapé).
+- Rodapé compartilhado com links de produto, legal e suporte.
+- No cadastro, é obrigatório marcar o aceite dos Termos e da Política; o aceite é gravado nos metadados do usuário (`terms_accepted_at`, `terms_version`).
+- Slugs `termos`, `privacidade`, `suporte` e `contato` ficam reservados (não podem virar nome de loja).
+
+Importante: os textos legais são modelos e **não substituem a revisão de um advogado**. Ajuste
+conforme o seu tipo de empresa (MEI, LTDA, pessoa física) e sua operação real. Ao revisar, atualize
+`TERMS_VERSION` em `src/lib/site.js`.
+
 ## GitHub Pages
 
 O site publica em `https://wolfsistemas.github.io/app/` a cada push na `main`.

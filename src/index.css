@@ -200,7 +200,22 @@ textarea { min-height: 90px; resize: vertical; }
 .muted { color: var(--muted); }
 .tiny { font-size: 12px; }
 .center { text-align: center; }
-.footer { padding: 40px 0 60px; color: var(--muted); }
+.footer { padding: 40px 0 60px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 40px; }
+.footer-grid { display: grid; gap: 22px; grid-template-columns: 1.4fr 1fr 1fr 1fr; }
+.footer-col { display: grid; gap: 8px; align-content: start; }
+.footer-col strong { color: var(--ink); }
+.footer-col a { font-size: 14px; }
+.footer-col a:hover { color: var(--green); text-decoration: underline; }
+
+.check { display: flex; align-items: flex-start; gap: 10px; font-weight: 500; font-size: 13px; line-height: 1.5; }
+.check input { width: 18px; height: 18px; margin-top: 2px; flex: none; accent-color: var(--green); }
+.check a { color: var(--green); font-weight: 700; text-decoration: underline; }
+
+.legal { max-width: 760px; padding: 32px 0 8px; }
+.legal h1 { margin-bottom: 6px; }
+.legal h2 { font-size: 22px; margin: 26px 0 8px; }
+.legal p { margin: 8px 0; }
+.legal .list { margin: 8px 0; }
 
 .store-hero {
   min-height: 240px;
@@ -417,6 +432,7 @@ textarea { min-height: 90px; resize: vertical; }
 
 @media (max-width: 860px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .footer-grid { grid-template-columns: 1fr 1fr; }
   .hero { padding-top: 28px; }
   .hide-sm { display: none; }
   .nav .between { flex-wrap: wrap; }

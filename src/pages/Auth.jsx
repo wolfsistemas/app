@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom'
 import Nav from '../components/Nav.jsx'
 import { useAuth } from '../lib/AuthContext.jsx'
 import { isSupabase, supabase } from '../lib/supabase.js'
+import { TERMS_VERSION } from '../lib/site.js'
 
 export default function Auth({ mode }) {
   const { user, store, signIn, signUp, isSupabase, recovering, clearRecovery, updatePassword } = useAuth()
@@ -10,6 +11,7 @@ export default function Auth({ mode }) {
   const signup = mode === 'signup'
   const [view, setView] = useState(signup ? 'signup' : recovering ? 'recover' : 'login')
   const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' })
+  const [accept, setAccept] = useState(false)
   const [error, setError] = useState('')
   const [ok, setOk] = useState('')
   const [busy, setBusy] = useState(false)
@@ -36,7 +38,8 @@ export default function Auth({ mode }) {
     setBusy(true)
     try {
       if (view === 'signup') {
-        await signUp(form)
+        if (!accept) throw new Error('Marque o aceite dos Termos e da Política de Privacidade para continuar.')
+        await signUp({ ...form, terms: { at: new Date().toISOString(), version: TERMS_VERSION } })
         navigate('/comecar')
         return
       }
@@ -96,6 +99,19 @@ export default function Auth({ mode }) {
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder="Ana"
                 />
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={accept}
+                    onChange={(e) => setAccept(e.target.checked)}
+                  />
+                  <span>
+                    Li e aceito os{' '}
+                    <Link to="/termos" target="_blank" onClick={(e) => e.stopPropagation()}>Termos de Uso</Link>
+                    {' '}e a{' '}
+                    <Link to="/privacidade" target="_blank" onClick={(e) => e.stopPropagation()}>Política de Privacidade</Link>.
+                  </span>
+                </label>
               </>
             )}
             {view !== 'recover' && (
