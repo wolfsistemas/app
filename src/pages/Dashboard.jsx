@@ -7,7 +7,8 @@ import PhotoInput from '../components/PhotoInput.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { cancelSubscription, createCheckout, createSubscription, syncSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
-import { connectMp, disconnectMp, refundPayment } from '../lib/payments.js'
+import { connectMp, disconnectMp, refundPayment, testPush } from '../lib/payments.js'
+import { disablePush, enablePush, hasLocalPushSubscription, pushSupported } from '../lib/push.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
 
 function beep() {
@@ -78,6 +79,8 @@ export default function Dashboard() {
   const [subBusy, setSubBusy] = useState(false)
   const [mpBusy, setMpBusy] = useState(false)
   const [mpSubAvailable, setMpSubAvailable] = useState(false)
+  const [pushOn, setPushOn] = useState(false)
+  const [pushBusy, setPushBusy] = useState(false)
   const url = publicUrl(store.slug)
   const isPro = isProStore(store)
   const mpConnected = Boolean(store.mp_connected)
@@ -176,6 +179,59 @@ export default function Dashboard() {
       supabase.removeChannel(channel)
     }
   }, [storeId])
+
+  useEffect(() => {
+    let alive = true
+    hasLocalPushSubscription()
+      .then((on) => {
+        if (alive) setPushOn(on)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  async function enableAlerts() {
+    setPushBusy(true)
+    setError('')
+    try {
+      await enablePush(storeId)
+      setPushOn(true)
+      showToast('Alertas ativados neste aparelho', 'ok')
+    } catch (err) {
+      const msg = err.message || 'Não foi possível ativar os alertas.'
+      setError(msg)
+      showToast(msg, 'bad')
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  async function disableAlerts() {
+    setPushBusy(true)
+    try {
+      await disablePush()
+      setPushOn(false)
+      showToast('Alertas desativados neste aparelho', 'ok')
+    } catch (err) {
+      showToast(err.message || 'Não foi possível desativar.', 'bad')
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  async function sendTestPush() {
+    setPushBusy(true)
+    try {
+      await testPush({ storeId })
+      showToast('Teste enviado. Confira a notificação.', 'ok')
+    } catch (err) {
+      showToast(err.message || 'Falha ao enviar o teste.', 'bad')
+    } finally {
+      setPushBusy(false)
+    }
+  }
 
   async function changeStatus(order, value) {
     if (value === order.status) return
@@ -675,6 +731,37 @@ export default function Dashboard() {
                 <button className="btn btn-gold" disabled={mpBusy || !billingUrl} onClick={connectMpAccount}>
                   {mpBusy ? 'Abrindo Mercado Pago...' : 'Conectar Mercado Pago'}
                 </button>
+              </>
+            )}
+          </section>
+          <section className="card pad stack" style={{ marginBottom: 16 }}>
+            <div className="between">
+              <h3 style={{ margin: 0 }}>Alertas</h3>
+              {pushSupported() && (
+                <span className={`chip status-${pushOn ? 'ok' : 'wait'}`}>
+                  {pushOn ? 'Ativado neste aparelho' : 'Desativado'}
+                </span>
+              )}
+            </div>
+            {!pushSupported() ? (
+              <p className="help">Este navegador não suporta notificações push. No iPhone, adicione o VitrineZap à tela de início para poder ativar.</p>
+            ) : (
+              <>
+                <p className="help">Receba uma notificação no navegador quando um pedido for pago, mesmo com o painel fechado. Ative em cada aparelho que quiser ser avisado.</p>
+                {pushOn ? (
+                  <div className="row">
+                    <button className="btn btn-ghost" disabled={pushBusy} onClick={disableAlerts}>
+                      {pushBusy ? 'Aguarde...' : 'Desativar'}
+                    </button>
+                    <button className="btn btn-dark" disabled={pushBusy} onClick={sendTestPush}>
+                      Enviar teste
+                    </button>
+                  </div>
+                ) : (
+                  <button className="btn btn-gold" disabled={pushBusy} onClick={enableAlerts}>
+                    {pushBusy ? 'Ativando...' : 'Ativar alertas'}
+                  </button>
+                )}
               </>
             )}
           </section>

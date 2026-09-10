@@ -1,4 +1,4 @@
-const VERSION = 'vz-v1'
+const VERSION = 'vz-v2'
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png']
 
 self.addEventListener('install', (event) => {
@@ -64,3 +64,40 @@ async function networkFirst(req) {
     return fallback || Response.error()
   }
 }
+
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = {}
+  }
+  const title = data.title || 'VitrineZap'
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || 'Pedido atualizado.',
+      icon: './icon-192.png',
+      badge: './icon-192.png',
+      tag: data.tag || 'vz-order',
+      data: { url: data.url || './' }
+    })
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const url = (event.notification.data && event.notification.data.url) || './'
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if ('focus' in client) {
+          client.navigate(url)
+          return client.focus()
+        }
+      }
+      if (clients.openWindow) return clients.openWindow(url)
+      return undefined
+    })
+  )
+})
+

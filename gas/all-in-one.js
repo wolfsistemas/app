@@ -586,6 +586,40 @@ function formatBrl(value) {
   return 'R$ ' + Number(value || 0).toFixed(2).replace('.', ',')
 }
 
+function pushConfigured() {
+  return Boolean(props().getProperty('PUSH_FUNCTION_URL') && props().getProperty('PUSH_SECRET'))
+}
+
+// Envia uma notificacao push (PWA) para os aparelhos da loja via Edge Function.
+function sendPush(storeId, title, body, url) {
+  var fnUrl = props().getProperty('PUSH_FUNCTION_URL')
+  var secret = props().getProperty('PUSH_SECRET')
+  if (!fnUrl || !secret) return { ok: false, error: 'push nao configurado' }
+  try {
+    var res = UrlFetchApp.fetch(fnUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-push-secret': secret },
+      payload: JSON.stringify({
+        action: 'send',
+        store_id: storeId,
+        title: title,
+        body: body,
+        url: url || ''
+      }),
+      muteHttpExceptions: true
+    })
+    if (res.getResponseCode() >= 300) {
+      notify('Falha ao enviar push (loja ' + storeId + ')', res.getContentText().slice(0, 400))
+      return { ok: false, error: 'push http ' + res.getResponseCode() }
+    }
+    return { ok: true }
+  } catch (err) {
+    notify('Erro ao enviar push', String(err))
+    return { ok: false, error: String(err) }
+  }
+}
+
 // Avisa o cliente com o link do pedido (uma vez). Evita spam: so envia para o
 // e-mail gravado no proprio pedido e marca customer_notified_at.
 function sendCustomerOrderEmail(order, storeName) {
@@ -642,6 +676,17 @@ function handleOrderNotify(body) {
   if (String(order.store_id) !== storeId) return { ok: false, error: 'Pedido nao pertence a loja' }
   var store = fetchStoreOwner(storeId)
   return { ok: true, sent: sendCustomerOrderEmail(order, store && store.name) }
+}
+
+// Dispara um push de teste (so o dono da loja). Usado pelo botao "Enviar teste".
+function handlePushTest(body) {
+  var storeId = String(body.store_id || '')
+  if (!storeId) return { ok: false, error: 'store_id ausente' }
+  var check = assertStoreOwner(storeId, body.access_token)
+  if (!check.ok) return check
+  if (!pushConfigured()) return { ok: false, error: 'Push nao configurado no servidor' }
+  var base = appUrl()
+  return sendPush(storeId, 'VitrineZap', 'Teste de alerta. Se voce recebeu, esta funcionando!', base ? base + '/painel' : '')
 }
 
 // Valida que o JWT do usuario logado e o dono da loja (evita sequestrar a loja).
@@ -1070,6 +1115,12 @@ function notifyOrderPaid(order, payment) {
     lines.push('Abra o pedido: ' + link)
   }
   var body = lines.join('\n')
+  sendPush(
+    order.store_id,
+    'Pedido ' + (order.code ? '#' + order.code : '') + ' pago',
+    formatBrl(amount) + ' - ' + (order.customer_name || 'Cliente'),
+    link
+  )
   var to = fetchOwnerEmail(store && store.owner_id)
   if (!to) {
     notify('Pedido pago (sem e-mail do lojista)', body)
@@ -1503,6 +1554,9 @@ function doPost(e) {
     } else if (body.action === 'order_notify') {
       log.action = 'order_notify'
       result = handleOrderNotify(body)
+    } else if (body.action === 'push_test') {
+      log.action = 'push_test'
+      result = handlePushTest(body)
     } else if (body.action === 'upload' || body.image) {
       log.action = 'upload'
       result = handleUpload(body)

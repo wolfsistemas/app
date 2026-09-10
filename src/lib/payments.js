@@ -75,6 +75,12 @@ export async function notifyOrder({ storeId, orderId }) {
   })
 }
 
+// Dispara uma notificação push de teste para os aparelhos da loja.
+export async function testPush({ storeId }) {
+  const access_token = await authToken()
+  return postBilling({ action: 'push_test', store_id: storeId, access_token })
+}
+
 // Lê o pedido pelo token público (RPC anônima, sem expor a tabela orders).
 export async function getOrderPublic(token) {
   if (!isSupabase || !token) return null

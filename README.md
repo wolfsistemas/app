@@ -130,6 +130,46 @@ No painel de developers, na aplicação:
 4. No painel, conecte a **sua** conta MP, monte um pedido na vitrine, gere o Pix e pague (valor mínimo). Confira o pedido virando "pago" e o e-mail.
 5. Pix no sandbox é limitado: o caminho confiável é testar em produção com valor baixo.
 
+## Notificações push (PWA) do lojista
+
+Avisa o lojista no navegador (mesmo com o painel fechado) quando um pedido é pago. É grátis e não depende de WhatsApp. A chave pública VAPID vai no front (`VITE_VAPID_PUBLIC_KEY`); a privada fica só na Edge Function.
+
+### 1. Banco
+
+Rode `supabase/up_push.sql` (tabela `push_subscriptions` + RLS por dono).
+
+### 2. Edge Function (envio)
+
+A função `supabase/functions/push-notify` faz o envio com a lib `web-push`.
+
+```bash
+# Gere um par de chaves VAPID (guarde a privada só no Supabase)
+npx web-push generate-vapid-keys
+
+# Deploy (sem verificação de JWT — protegida por x-push-secret)
+supabase functions deploy push-notify --no-verify-jwt
+
+# Secrets
+supabase secrets set VAPID_PUBLIC_KEY=<public> VAPID_PRIVATE_KEY=<private> VAPID_SUBJECT=mailto:seu@email.com
+supabase secrets set PUSH_SECRET=<um-segredo-forte>
+```
+
+Também dá para criar/editar a função pelo painel do Supabase (Edge Functions), desligando "Enforce JWT".
+
+### 3. Front
+
+`VITE_VAPID_PUBLIC_KEY` = a chave **pública** (em `.env` e `.env.production`). O botão **Ativar alertas** fica no painel, aba **Plano**.
+
+### 4. GAS
+
+Script Properties: `PUSH_FUNCTION_URL` (URL da Edge Function) e `PUSH_SECRET` (o mesmo do passo 2). Ao marcar um pedido como pago, o GAS chama a função.
+
+### Observações
+
+- **iPhone**: só funciona se o lojista adicionar o VitrineZap à tela de início (iOS 16.4+). No Android e no desktop funciona direto.
+- No checkout do PWA, a permissão é por aparelho; ative em cada um que quiser receber.
+- Se parar de chegar, desative e ative de novo no painel.
+
 ## GitHub Pages
 
 O site publica em `https://wolfsistemas.github.io/app/` a cada push na `main`.
