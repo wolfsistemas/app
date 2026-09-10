@@ -24,8 +24,8 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (req.method !== 'POST') return json({ ok: false, error: 'method' }, 405)
 
-  const secret = req.headers.get('x-push-secret') || ''
-  const expected = Deno.env.get('PUSH_SECRET') || ''
+  const secret = (req.headers.get('x-push-secret') || '').trim()
+  const expected = (Deno.env.get('PUSH_SECRET') || '').trim()
   if (!expected || secret !== expected) {
     console.error('push unauthorized', {
       hasExpected: Boolean(expected),

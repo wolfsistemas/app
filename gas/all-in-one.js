@@ -587,13 +587,16 @@ function formatBrl(value) {
 }
 
 function pushConfigured() {
-  return Boolean(props().getProperty('PUSH_FUNCTION_URL') && props().getProperty('PUSH_SECRET'))
+  return Boolean(
+    String(props().getProperty('PUSH_FUNCTION_URL') || '').trim() &&
+      String(props().getProperty('PUSH_SECRET') || '').trim()
+  )
 }
 
 // Envia uma notificacao push (PWA) para os aparelhos da loja via Edge Function.
 function sendPush(storeId, title, body, url) {
-  var fnUrl = props().getProperty('PUSH_FUNCTION_URL')
-  var secret = props().getProperty('PUSH_SECRET')
+  var fnUrl = String(props().getProperty('PUSH_FUNCTION_URL') || '').trim()
+  var secret = String(props().getProperty('PUSH_SECRET') || '').trim()
   if (!fnUrl || !secret) return { ok: false, error: 'push nao configurado' }
   try {
     var res = UrlFetchApp.fetch(fnUrl, {
