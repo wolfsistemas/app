@@ -10,11 +10,13 @@ const RATIOS = [
 
 const MAX_OUT = 1600
 
-export default function ImageCropper({ src, onCancel, onConfirm }) {
+export default function ImageCropper({ src, defaultRatio = '1:1', onCancel, onConfirm }) {
   const stageRef = useRef(null)
   const imgRef = useRef(null)
   const dragRef = useRef(null)
-  const [ratioKey, setRatioKey] = useState('1:1')
+  const [ratioKey, setRatioKey] = useState(
+    defaultRatio === 'Original' || RATIOS.some(([k]) => k === defaultRatio) ? defaultRatio : '1:1'
+  )
   const [stageW, setStageW] = useState(0)
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   const [scale, setScale] = useState(1)
@@ -22,7 +24,12 @@ export default function ImageCropper({ src, onCancel, onConfirm }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const ratio = RATIOS.find(([k]) => k === ratioKey)[1]
+  const ratio =
+    ratioKey === 'Original'
+      ? natural.w && natural.h
+        ? natural.w / natural.h
+        : 1
+      : RATIOS.find(([k]) => k === ratioKey)[1]
   const stageH = stageW ? stageW / ratio : 0
   const base = natural.w && stageW ? Math.max(stageW / natural.w, stageH / natural.h) : 1
   const zoom = base ? Math.min(3, Math.max(1, scale / base)) : 1
@@ -162,6 +169,13 @@ export default function ImageCropper({ src, onCancel, onConfirm }) {
               {k}
             </button>
           ))}
+          <button
+            type="button"
+            className={`btn ${ratioKey === 'Original' ? 'btn-dark' : 'btn-ghost'}`}
+            onClick={() => setRatioKey('Original')}
+          >
+            Original
+          </button>
         </div>
 
         <div className="zoom-row">

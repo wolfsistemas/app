@@ -3,7 +3,7 @@ import { uploadPhoto } from '../lib/upload.js'
 import PImg from './PImg.jsx'
 import ImageCropper from './ImageCropper.jsx'
 
-export default function PhotoInput({ label, value, onChange }) {
+export default function PhotoInput({ label, value, onChange, defaultRatio }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [cropSrc, setCropSrc] = useState('')
@@ -69,7 +69,7 @@ export default function PhotoInput({ label, value, onChange }) {
       </div>
       <div className="help">{busy ? 'Enviando foto...' : 'Escolha um arquivo; você ajusta o enquadramento antes de salvar.'}</div>
       {error && <div className="error">{error}</div>}
-      {cropSrc && <ImageCropper src={cropSrc} onCancel={closeCrop} onConfirm={onCropped} />}
+      {cropSrc && <ImageCropper src={cropSrc} defaultRatio={defaultRatio} onCancel={closeCrop} onConfirm={onCropped} />}
     </div>
   )
 }

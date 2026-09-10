@@ -338,6 +338,7 @@ export default function Dashboard() {
               </select>
               <PhotoInput
                 label="Foto de capa"
+                defaultRatio="16:9"
                 value={form.cover_url || ''}
                 onChange={(url) => setForm({ ...form, cover_url: url })}
               />
@@ -435,6 +436,7 @@ export default function Dashboard() {
                 <input value={product.category || ''} onChange={(e) => setProduct({ ...product, category: e.target.value })} />
                 <PhotoInput
                   label="Foto"
+                  defaultRatio="4:3"
                   value={product.photo_url || ''}
                   onChange={(url) => setProduct({ ...product, photo_url: url })}
                 />

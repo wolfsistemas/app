@@ -15,6 +15,7 @@ export default function PublicStore() {
   const [products, setProducts] = useState([])
   const [cart, setCart] = useState([])
   const [category, setCategory] = useState('todos')
+  const [zoom, setZoom] = useState('')
   const [checkout, setCheckout] = useState(false)
   const [customer, setCustomer] = useState({ name: '', phone: '', note: '' })
   const [missing, setMissing] = useState(false)
@@ -227,7 +228,7 @@ export default function PublicStore() {
         <div className="grid-3" style={{ marginTop: 12 }}>
           {visible.map((p) => (
             <article className="card product-card" key={p.id}>
-              {p.photo_url ? <PImg className="product-img" src={p.photo_url} alt={p.name} /> : <div className="product-img" style={{ background: '#eee' }} />}
+              {p.photo_url ? <PImg className="product-img zoomable" src={p.photo_url} alt={p.name} onClick={() => setZoom(p.photo_url)} /> : <div className="product-img" />}
               <div className="pad stack">
                 <strong>{p.name}</strong>
                 {p.description && <p className="tiny">{p.description}</p>}
@@ -279,6 +280,18 @@ export default function PublicStore() {
             <button className="btn btn-whats" disabled={!customer.name || sending} onClick={sendOrder}>
               {sending ? 'Enviando...' : 'Enviar no WhatsApp'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {zoom && (
+        <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setZoom('') }}>
+          <div className="card pad stack modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 'min(720px, 100%)' }}>
+            <div className="between">
+              <h3>Foto do produto</h3>
+              <button type="button" className="modal-x" aria-label="Fechar" onClick={() => setZoom('')}>×</button>
+            </div>
+            <PImg className="zoom-img" src={zoom} alt="" />
           </div>
         </div>
       )}
