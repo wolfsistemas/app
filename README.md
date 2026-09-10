@@ -118,6 +118,8 @@ No painel de developers, na aplicação:
 3. No checkout, `action=create_pix` cria o Pix com o token do vendedor e guarda o QR/copia-e-cola no pedido.
 4. O MP chama o webhook (`payment`); o GAS identifica a loja pelo `body.user_id`, re-busca o pagamento com o token do vendedor e marca `payment_status = paid`.
 5. A página pública `/pedido/<public_token>` mostra o status (polling) e o lojista recebe e-mail.
+6. O cliente acompanha o pedido na mesma página (recebido, em preparo, enviado, entregue) e fala com a loja pelo WhatsApp; se o Pix vencer, ele gera um novo ali mesmo (`action=create_pix` com `renew`).
+7. No painel, o lojista vê o **pagamento** (Pago/Aguardando) e avança a **situação** (aceitar, enviar, confirmar entrega). Cancelar um pedido pago dispara o **estorno** na conta dele (`action=refund_payment`).
 
 ### Testar
 

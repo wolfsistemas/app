@@ -7,7 +7,7 @@ import PhotoInput from '../components/PhotoInput.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { cancelSubscription, createCheckout, createSubscription, syncSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
-import { connectMp, disconnectMp } from '../lib/payments.js'
+import { connectMp, disconnectMp, refundPayment } from '../lib/payments.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
 
 function beep() {
@@ -176,6 +176,31 @@ export default function Dashboard() {
       supabase.removeChannel(channel)
     }
   }, [storeId])
+
+  async function changeStatus(order, value) {
+    if (value === order.status) return
+    setError('')
+    const isPaidPix = order.payment_status === 'paid' && Boolean(order.mp_payment_id)
+    if (value === 'cancelado') {
+      const question = isPaidPix
+        ? 'Cancelar o pedido e estornar o valor para o cliente?'
+        : 'Cancelar este pedido?'
+      if (!window.confirm(question)) return
+    }
+    try {
+      if (value === 'cancelado' && isPaidPix) {
+        await refundPayment({ storeId, orderId: order.id })
+        applyOrderPatch(order.id, { payment_status: 'refunded', status: 'cancelado' })
+        showToast('Pedido cancelado e valor estornado', 'ok')
+      } else {
+        await updateOrder(order.id, { status: value })
+      }
+    } catch (err) {
+      const msg = err.message || 'Não foi possível atualizar o pedido.'
+      setError(msg)
+      showToast(msg, 'bad')
+    }
+  }
 
   async function upgrade() {
     setError('')
@@ -551,7 +576,7 @@ export default function Dashboard() {
                       <td>{money(o.total)}</td>
                       <td><span className={`chip status-${pay.tone}`}>{pay.label}</span></td>
                       <td>
-                        <select value={o.status} onChange={(e) => updateOrder(o.id, { status: e.target.value })}>
+                        <select value={o.status} onChange={(e) => changeStatus(o, e.target.value)}>
                           {!ORDER_STATUS_ORDER.includes(o.status) && (
                             <option value={o.status}>{ORDER_STATUS[o.status] || o.status}</option>
                           )}

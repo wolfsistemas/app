@@ -44,12 +44,25 @@ export async function disconnectMp({ storeId }) {
 }
 
 // Cria o Pix do pedido na conta do vendedor (dinheiro não passa pelo VitrineZap).
-export async function createPix({ storeId, orderId, payerEmail }) {
+// renew=true gera um QR novo após o vencimento.
+export async function createPix({ storeId, orderId, payerEmail, renew }) {
   return postBilling({
     action: 'create_pix',
     store_id: storeId,
     order_id: orderId,
-    payer_email: payerEmail || ''
+    payer_email: payerEmail || '',
+    renew: Boolean(renew)
+  })
+}
+
+// Estorna um pedido pago (reembolso sai do saldo do vendedor).
+export async function refundPayment({ storeId, orderId }) {
+  const access_token = await authToken()
+  return postBilling({
+    action: 'refund_payment',
+    store_id: storeId,
+    order_id: orderId,
+    access_token
   })
 }
 

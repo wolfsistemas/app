@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getOrderPublic } from '../lib/payments.js'
+import { createPix, getOrderPublic } from '../lib/payments.js'
 import { isSupabase, supabase } from '../lib/supabase.js'
-import { money } from '../lib/format.js'
+import { money, onlyDigits } from '../lib/format.js'
 import Brand from '../components/Brand.jsx'
 import { useToast } from '../components/Toast.jsx'
 
@@ -13,13 +13,27 @@ const STATUS = {
   refunded: { label: 'Pagamento estornado', tone: 'bad' }
 }
 
+const STEPS = ['Recebido', 'Em preparo', 'Enviado', 'Entregue']
+const FULFILL_STEP = {
+  novo: 0,
+  atendido: 1,
+  preparando: 1,
+  enviado: 2,
+  entregue: 3
+}
+
+const PIX_TTL_MS = 30 * 60 * 1000
+
 export default function Order() {
   const { token } = useParams()
   const showToast = useToast()
   const [order, setOrder] = useState(null)
   const [storeName, setStoreName] = useState('')
+  const [storePhone, setStorePhone] = useState('')
   const [missing, setMissing] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [pixBusy, setPixBusy] = useState(false)
+  const storeLoaded = useRef(false)
 
   useEffect(() => {
     let alive = true
@@ -36,12 +50,26 @@ export default function Order() {
         }
         setOrder(row)
         setLoading(false)
-        if (!storeName && isSupabase && row.store_id) {
-          const { data } = await supabase.from('stores').select('name').eq('id', row.store_id).maybeSingle()
-          if (alive && data) setStoreName(data.name || '')
+
+        if (!storeLoaded.current && isSupabase && row.store_id) {
+          storeLoaded.current = true
+          supabase
+            .from('stores')
+            .select('name, whatsapp')
+            .eq('id', row.store_id)
+            .maybeSingle()
+            .then(({ data }) => {
+              if (alive && data) {
+                setStoreName(data.name || '')
+                setStorePhone(data.whatsapp || '')
+              }
+            })
         }
-        if (row.payment_status === 'pending' && row.payment_code) {
-          timer = window.setTimeout(load, 5000)
+
+        const waitingPix = row.payment_status === 'pending' && Boolean(row.payment_code) && !isExpired(row)
+        const tracking = row.status !== 'entregue' && row.status !== 'cancelado'
+        if (waitingPix || tracking) {
+          timer = window.setTimeout(load, 6000)
         }
       } catch {
         if (alive) {
@@ -68,6 +96,20 @@ export default function Order() {
     }
   }
 
+  async function regeneratePix() {
+    setPixBusy(true)
+    try {
+      await createPix({ storeId: order.store_id, orderId: order.id, renew: true })
+      const row = await getOrderPublic(token)
+      if (row) setOrder(row)
+      showToast('Novo Pix gerado', 'ok')
+    } catch (err) {
+      showToast(err.message || 'Não foi possível gerar o Pix', 'bad')
+    } finally {
+      setPixBusy(false)
+    }
+  }
+
   if (loading) {
     return <main className="wrap" style={{ padding: 48 }}>Abrindo pedido...</main>
   }
@@ -85,6 +127,10 @@ export default function Order() {
   const status = STATUS[order.payment_status] || STATUS.pending
   const items = order.items || []
   const code = order.code ? String(order.code).padStart(3, '0') : ''
+  const expired = order.payment_status === 'pending' && isExpired(order)
+  const step = FULFILL_STEP[order.status] ?? 0
+  const phone = onlyDigits(storePhone)
+  const waText = encodeURIComponent(`Olá! Fiz o pedido${code ? ` nº ${code}` : ''} no valor de ${money(order.total)}.`)
 
   return (
     <div className="theme-bosque">
@@ -118,11 +164,25 @@ export default function Order() {
             </div>
           </div>
 
-          {order.payment_status === 'paid' && (
-            <p className="ok">Recebemos o seu pagamento. A loja foi avisada e vai combinar a entrega.</p>
+          {order.payment_status === 'paid' && order.status !== 'cancelado' && (
+            <div className="stack" style={{ gap: 8 }}>
+              <p className="ok" style={{ margin: 0 }}>
+                Recebemos o seu pagamento. A loja foi avisada.
+              </p>
+              <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+                {STEPS.map((label, idx) => (
+                  <span key={label} className={`chip ${idx <= step ? 'status-ok' : 'status-wait'}`}>
+                    {idx <= step ? '✓ ' : ''}
+                    {label}
+                  </span>
+                ))}
+              </div>
+              {order.status === 'entregue' && <p className="help">Pedido entregue. Obrigado!</p>}
+              {order.status === 'enviado' && <p className="help">Seu pedido saiu para entrega.</p>}
+            </div>
           )}
 
-          {order.payment_status === 'pending' && order.payment_code && (
+          {order.payment_status === 'pending' && order.payment_code && !expired && (
             <>
               <p className="help">Pague com o Pix abaixo. Esta página confirma sozinha assim que o pagamento cair.</p>
               {order.payment_qr && (
@@ -134,23 +194,50 @@ export default function Order() {
               )}
               <textarea readOnly value={order.payment_code} rows={4} onFocus={(e) => e.target.select()} />
               <button className="btn btn-gold" onClick={copyCode}>Copiar código Pix</button>
-              {order.payment_expires_at && (
-                <p className="help">
-                  Válido até {new Date(order.payment_expires_at).toLocaleString('pt-BR')}.
-                </p>
-              )}
+              <p className="help">Válido até {new Date(expiresAt(order)).toLocaleString('pt-BR')}.</p>
+            </>
+          )}
+
+          {expired && (
+            <>
+              <p className="help">Este Pix expirou. Gere um novo para concluir o pagamento.</p>
+              <button className="btn btn-dark" disabled={pixBusy} onClick={regeneratePix}>
+                {pixBusy ? 'Gerando...' : 'Gerar novo Pix'}
+              </button>
             </>
           )}
 
           {order.payment_status === 'pending' && !order.payment_code && (
-            <p className="help">Aguardando a loja gerar a cobrança. Atualize a página em instantes.</p>
+            <p className="help">A loja ainda vai gerar a cobrança. Atualize a página em instantes.</p>
           )}
 
           {order.payment_status === 'failed' && (
             <p className="help">O pagamento não foi aprovado. Fale com a loja para tentar de novo.</p>
           )}
+
+          {phone && (
+            <a
+              className="btn btn-whats"
+              href={`https://wa.me/${phone}?text=${waText}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Falar com a loja
+            </a>
+          )}
         </section>
       </main>
     </div>
   )
+
+  function isExpired(row) {
+    const at = expiresAt(row)
+    return at > 0 && Date.now() > at
+  }
+
+  function expiresAt(row) {
+    if (row.payment_expires_at) return new Date(row.payment_expires_at).getTime()
+    if (row.created_at) return new Date(row.created_at).getTime() + PIX_TTL_MS
+    return 0
+  }
 }

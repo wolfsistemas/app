@@ -823,13 +823,19 @@ function handleCreatePix(body) {
     }
   }
 
+  // Chave de idempotencia: estavel para o mesmo Pix, nova a cada renovacao
+  // (renew) para permitir gerar um QR novo apos o vencimento.
+  var keySuffix = body.renew
+    ? 'renew-' + (order.mp_payment_id || 'x')
+    : (order.mp_payment_id || 'first')
+
   var res = UrlFetchApp.fetch('https://api.mercadopago.com/v1/payments', {
     method: 'post',
     contentType: 'application/json',
     headers: {
       Authorization: 'Bearer ' + token,
-      // Obrigatório na API de Pagamentos; fixo por pedido para evitar cobrança dupla.
-      'X-Idempotency-Key': 'vitrinezap-order-' + orderId
+      // Obrigatorio na API de Pagamentos; evita cobranca dupla.
+      'X-Idempotency-Key': 'vitrinezap-order-' + orderId + '-' + keySuffix
     },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
@@ -879,6 +885,65 @@ function handleCreatePix(body) {
     ticket_url: (td && td.ticket_url) || '',
     expires_at: expiresAt
   }
+}
+
+// Reembolsa um pedido pago na conta do vendedor (estorno sai do saldo dele).
+function handleRefundOrder(body) {
+  var storeId = String(body.store_id || '')
+  var orderId = String(body.order_id || '')
+  if (!storeId || !orderId) return { ok: false, error: 'store_id/order_id ausentes' }
+  var check = assertStoreOwner(storeId, body.access_token)
+  if (!check.ok) return check
+
+  var orders = sbFetch('/orders?id=eq.' + encodeURIComponent(orderId) + '&select=*&limit=1')
+  var order = orders && orders.length ? orders[0] : null
+  if (!order) return { ok: false, error: 'Pedido nao encontrado' }
+  if (String(order.store_id) !== storeId) return { ok: false, error: 'Pedido nao pertence a loja' }
+  if (String(order.payment_status || '') === 'refunded') {
+    return { ok: true, already: true, payment_status: 'refunded' }
+  }
+  if (String(order.payment_status || '') !== 'paid' || !order.mp_payment_id) {
+    return { ok: false, error: 'Pedido nao esta pago' }
+  }
+
+  var token = mpSellerToken(storeId)
+  if (!token) return { ok: false, error: 'Loja sem Mercado Pago conectado' }
+
+  var res = UrlFetchApp.fetch(
+    'https://api.mercadopago.com/v1/payments/' + encodeURIComponent(order.mp_payment_id) + '/refunds',
+    {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'X-Idempotency-Key': 'vitrinezap-refund-' + orderId
+      },
+      payload: JSON.stringify({}),
+      muteHttpExceptions: true
+    }
+  )
+  var text = res.getContentText()
+  var parsed = {}
+  try { parsed = JSON.parse(text) } catch (err) { parsed = {} }
+  if (res.getResponseCode() >= 300 || !parsed.id) {
+    notify('Falha ao estornar pedido ' + orderId, text.slice(0, 800))
+    return {
+      ok: false,
+      error: parsed.message || parsed.error || 'Mercado Pago recusou o estorno',
+      status: res.getResponseCode()
+    }
+  }
+
+  sbFetch('/orders?id=eq.' + encodeURIComponent(orderId), {
+    method: 'patch',
+    prefer: 'return=minimal',
+    payload: { payment_status: 'refunded', status: 'cancelado' }
+  })
+  notify(
+    'Pedido ' + orderId + ' estornado',
+    'Pedido ' + (order.code ? '#' + order.code : orderId) + ' · refund ' + parsed.id
+  )
+  return { ok: true, refund_id: String(parsed.id) }
 }
 
 var MP_ORDER_STATUS = {
@@ -1339,6 +1404,9 @@ function doPost(e) {
     } else if (body.action === 'create_pix') {
       log.action = 'create_pix'
       result = handleCreatePix(body)
+    } else if (body.action === 'refund_payment') {
+      log.action = 'refund_payment'
+      result = handleRefundOrder(body)
     } else if (body.action === 'upload' || body.image) {
       log.action = 'upload'
       result = handleUpload(body)
