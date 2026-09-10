@@ -3,6 +3,10 @@ name: github-pages
 on:
   push:
     branches: [main]
+  schedule:
+    # Atualiza as páginas de OG/SEO das lojas novas todo dia (06:17 UTC).
+    - cron: '17 6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,7 +21,7 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:pages
         env:
           GITHUB_PAGES: 'true'
       - uses: peaceiris/actions-gh-pages@v4

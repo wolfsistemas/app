@@ -10,6 +10,17 @@ import Brand from '../components/Brand.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
 
+function setMeta(attr, key, content) {
+  if (typeof document === 'undefined') return
+  let el = document.head.querySelector(`meta[${attr}="${key}"]`)
+  if (!el) {
+    el = document.createElement('meta')
+    el.setAttribute(attr, key)
+    document.head.appendChild(el)
+  }
+  el.setAttribute('content', content || '')
+}
+
 export default function PublicStore() {
   const { slug } = useParams()
   const navigate = useNavigate()
@@ -83,10 +94,21 @@ export default function PublicStore() {
     document.title = store
       ? `${store.name} · peça pelo WhatsApp`
       : 'VitrineZap'
+    if (store) {
+      const desc = (store.bio || `Faça seu pedido pelo WhatsApp em ${store.name}.`).slice(0, 200)
+      const base = (import.meta.env.VITE_SITE_URL || window.location.origin).replace(/\/$/, '')
+      const img = store.avatar_url || store.cover_url || products.find((p) => p.photo_url)?.photo_url || ''
+      setMeta('name', 'description', desc)
+      setMeta('property', 'og:type', 'website')
+      setMeta('property', 'og:title', store.name)
+      setMeta('property', 'og:description', desc)
+      setMeta('property', 'og:url', `${base}/${slug}`)
+      if (img) setMeta('property', 'og:image', img)
+    }
     return () => {
       document.title = 'VitrineZap — catalogo no WhatsApp'
     }
-  }, [store])
+  }, [store, products, slug])
 
   async function sendOrder() {
     if (!customer.name || sending) return

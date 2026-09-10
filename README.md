@@ -191,6 +191,29 @@ Importante: os textos legais são modelos e **não substituem a revisão de um a
 conforme o seu tipo de empresa (MEI, LTDA, pessoa física) e sua operação real. Ao revisar, atualize
 `TERMS_VERSION` em `src/lib/site.js`.
 
+## OG e SEO das vitrines
+
+Como o app é uma SPA, robôs do WhatsApp/Google não executam JavaScript e só veriam um preview
+genérico. Para resolver, o build **pré-renderiza uma página por loja** com Open Graph, Twitter Card,
+canonical, JSON-LD, além de `sitemap.xml` e `robots.txt`.
+
+- Script: `scripts/prerender-og.mjs` (roda no `npm run build:pages`, após o `vite build`).
+- Ele lê as lojas públicas do Supabase (`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`) e gera
+  `dist/<slug>/index.html` com as meta tags da loja (nome, bio, imagem).
+- Imagem usada: avatar da loja, capa, ou a foto do primeiro produto; se não houver, o ícone do app.
+- `VITE_SITE_URL` (sem barra final) define canonical/sitemap/OG absolutos. Ex.: `https://wolfsistemas.github.io/app`.
+- No CI, o workflow roda a cada push **e todo dia às 06:17 UTC** (cron), para atualizar lojas novas.
+
+Testar localmente:
+
+```bash
+GITHUB_PAGES=true npm run build:pages
+```
+
+Observação: a página OG de uma loja nova só aparece depois do próximo build (push) ou do cron diário,
+porque não há servidor para gerar em tempo real. Quando houver domínio, basta ajustar `VITE_SITE_URL`
+(e a `base` do `vite.config.js` se o app sair de `/app/`).
+
 ## GitHub Pages
 
 O site publica em `https://wolfsistemas.github.io/app/` a cada push na `main`.

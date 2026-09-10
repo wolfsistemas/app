@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "og": "node scripts/prerender-og.mjs",
+    "build:pages": "vite build && node scripts/prerender-og.mjs",
     "preview": "vite preview --host --port 4173"
   },
   "dependencies": {
