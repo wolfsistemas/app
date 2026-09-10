@@ -96,6 +96,15 @@ export default function Order() {
     }
   }
 
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      showToast('Link do pedido copiado', 'ok')
+    } catch {
+      showToast('Não foi possível copiar o link', 'info')
+    }
+  }
+
   async function regeneratePix() {
     setPixBusy(true)
     try {
@@ -179,6 +188,7 @@ export default function Order() {
               </div>
               {order.status === 'entregue' && <p className="help">Pedido entregue. Obrigado!</p>}
               {order.status === 'enviado' && <p className="help">Seu pedido saiu para entrega.</p>}
+              <button type="button" className="btn btn-ghost" onClick={copyLink}>Copiar link do pedido</button>
             </div>
           )}
 
@@ -213,6 +223,10 @@ export default function Order() {
 
           {order.payment_status === 'failed' && (
             <p className="help">O pagamento não foi aprovado. Fale com a loja para tentar de novo.</p>
+          )}
+
+          {order.payment_status !== 'paid' && (
+            <button type="button" className="btn btn-ghost" onClick={copyLink}>Copiar link do pedido</button>
           )}
 
           {phone && (
