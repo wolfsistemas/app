@@ -58,7 +58,8 @@ export default function ImageCropper({ src, onCancel, onConfirm }) {
   function onImgLoad(e) {
     const n = { w: e.target.naturalWidth, h: e.target.naturalHeight }
     setNatural(n)
-    if (stageW && stageH) fit(n, stageW, stageH)
+    const w = stageRef.current?.clientWidth || stageW
+    if (n.w && w) fit(n, w, w / ratio)
   }
 
   useEffect(() => {

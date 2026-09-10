@@ -361,8 +361,7 @@ textarea { min-height: 90px; resize: vertical; }
 }
 .crop-stage {
   position: relative;
-  width: 100%;
-  max-width: 340px;
+  width: min(340px, 100%);
   margin: 0 auto;
   overflow: hidden;
   background: #0c1512;
@@ -375,6 +374,8 @@ textarea { min-height: 90px; resize: vertical; }
   position: absolute;
   top: 0;
   left: 0;
+  max-width: none;
+  max-height: none;
   transform-origin: 0 0;
   will-change: transform;
   user-select: none;
