@@ -368,39 +368,7 @@ export default function Dashboard() {
                 <button className="btn btn-gold" onClick={() => setTab('plano')}>Ver plano</button>
               </div>
             )}
-            {product && (
-              <form className="card pad form" onSubmit={onSaveProduct}>
-                {product.id && (
-                  <p className="help">Você está editando um produto existente.</p>
-                )}
-                <label>Nome</label>
-                <input required value={product.name} onChange={(e) => setProduct({ ...product, name: e.target.value })} />
-                <div className="grid-2">
-                  <div>
-                    <label>Preço</label>
-                    <input required value={product.price} onChange={(e) => setProduct({ ...product, price: e.target.value })} />
-                  </div>
-                  <div>
-                    <label>De (opcional)</label>
-                    <input value={product.compare_at || ''} onChange={(e) => setProduct({ ...product, compare_at: e.target.value })} />
-                  </div>
-                </div>
-                <label>Categoria</label>
-                <input value={product.category || ''} onChange={(e) => setProduct({ ...product, category: e.target.value })} />
-                <PhotoInput
-                  label="Foto"
-                  value={product.photo_url || ''}
-                  onChange={(url) => setProduct({ ...product, photo_url: url })}
-                />
-                <label>Descrição</label>
-                <textarea value={product.description || ''} onChange={(e) => setProduct({ ...product, description: e.target.value })} />
-                <div className="row">
-                  <button className="btn btn-dark">Salvar</button>
-                  <button type="button" className="btn btn-ghost" onClick={() => setProduct(null)}>Cancelar</button>
-                </div>
-              </form>
-            )}
-            {products.length === 0 && !product ? (
+            {products.length === 0 ? (
               <div className="card pad center stack" style={{ marginTop: 12, textAlign: 'center' }}>
                 <h3>Nenhum produto ainda</h3>
                 <p className="muted">Cadastre seu primeiro produto para montar a vitrine.</p>
@@ -440,6 +408,45 @@ export default function Dashboard() {
               </div>
             )}
           </section>
+        )}
+
+        {product && (
+          <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setProduct(null) }}>
+            <div className="card pad stack modal" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="between">
+                <h3>{product.id ? 'Editar produto' : 'Novo produto'}</h3>
+                <button type="button" className="modal-x" aria-label="Fechar" onClick={() => setProduct(null)}>×</button>
+              </div>
+              <form className="form" onSubmit={onSaveProduct}>
+                {product.id && <p className="help">Você está editando um produto existente.</p>}
+                <label>Nome</label>
+                <input required value={product.name} onChange={(e) => setProduct({ ...product, name: e.target.value })} />
+                <div className="grid-2">
+                  <div>
+                    <label>Preço</label>
+                    <input required value={product.price} onChange={(e) => setProduct({ ...product, price: e.target.value })} />
+                  </div>
+                  <div>
+                    <label>De (opcional)</label>
+                    <input value={product.compare_at || ''} onChange={(e) => setProduct({ ...product, compare_at: e.target.value })} />
+                  </div>
+                </div>
+                <label>Categoria</label>
+                <input value={product.category || ''} onChange={(e) => setProduct({ ...product, category: e.target.value })} />
+                <PhotoInput
+                  label="Foto"
+                  value={product.photo_url || ''}
+                  onChange={(url) => setProduct({ ...product, photo_url: url })}
+                />
+                <label>Descrição</label>
+                <textarea value={product.description || ''} onChange={(e) => setProduct({ ...product, description: e.target.value })} />
+                <div className="row">
+                  <button className="btn btn-dark">{product.id ? 'Salvar' : 'Adicionar'}</button>
+                  <button type="button" className="btn btn-ghost" onClick={() => setProduct(null)}>Cancelar</button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
 
         {tab === 'pedidos' && (
