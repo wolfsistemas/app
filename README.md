@@ -25,6 +25,7 @@ Sem VPS. O browser fala direto com o Supabase.
 - Limite de 8 produtos no plano grátis
 - Marca VitrineZap no rodapé do plano free (removida no Loja)
 - Checkout avulso via link (InfinitePay / Mercado Pago) + **assinatura mensal recorrente (Mercado Pago hospedado com plano, cancele quando quiser)**
+- **Pix com confirmação automática** no Plano Loja: o lojista conecta a conta do Mercado Pago e o dinheiro cai direto nele (sem custódia)
 
 ## Como rodar
 
@@ -39,7 +40,7 @@ Sem `.env`, o app usa **modo local** (dados no navegador + loja demo).
 
 1. Crie um projeto no Supabase.
 2. No SQL Editor, rode nesta ordem: `supabase/schema.sql`, `supabase/rls.sql`, `supabase/storage.sql`.
-3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`.
+3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`. Para o Pix na conta do vendedor (OAuth), rode `supabase/up_seller_payments.sql`.
 4. Em Authentication > Providers, deixe e-mail/senha ligado. Para testar rápido, desligue **Confirm email**.
 5. Em Authentication > URL configuration: Site URL e Redirect URLs apontando para o endereço do app (`https://wolfsistemas.github.io/app/**`).
 6. Copie `.env.example` para `.env` e preencha URL + anon key.
@@ -90,6 +91,41 @@ Como funciona:
 Observação: recorrência automática exige **cartão** (a 1ª cobrança pode ser no cartão; Pix avulso continua como alternativa de 30 dias).
 
 Properties comuns: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `EMAIL_LOG` (padrão: wolfsaasbr@gmail.com).
+
+## Recebimento Pix na conta do vendedor (A1, sem custódia)
+
+O **Plano Loja** conecta a conta do Mercado Pago do lojista via **OAuth**. A partir daí, o Pix do pedido é criado **na conta do vendedor** (o dinheiro nunca passa pelo VitrineZap) e o pedido é confirmado **automaticamente** pelo webhook. O plano grátis continua só com a chave PIX manual.
+
+### Configurar o app no Mercado Pago
+
+No painel de developers, na aplicação:
+
+- Tipo de solução: **Pagamentos online**
+- Plataforma de e-commerce: **Não**
+- Produto: **Checkout Transparente > API Pagamentos**
+- Redirect URL: a URL `/exec` do GAS (a mesma de `MP_REDIRECT_URI`)
+- PKCE: **Não**
+- Permissões: **read + write + offline access**
+
+### Script Properties no GAS
+
+`MP_CLIENT_ID`, `MP_CLIENT_SECRET` (segredo — só aqui), `MP_REDIRECT_URI` (a mesma URL cadastrada). O `MP_ACCESS_TOKEN` continua sendo o seu token (assinatura do plano); o token do vendedor fica no banco (`store_payments`, privada, só `service_role`).
+
+### Fluxo
+
+1. Lojista clica em **Conectar Mercado Pago** no painel (`action=mp_connect`) e autoriza no MP.
+2. O GAS troca o `code` pelo `access_token` do vendedor (`doGet` com `?code&state`), grava em `store_payments` e marca `stores.mp_connected`.
+3. No checkout, `action=create_pix` cria o Pix com o token do vendedor e guarda o QR/copia-e-cola no pedido.
+4. O MP chama o webhook (`payment`); o GAS identifica a loja pelo `body.user_id`, re-busca o pagamento com o token do vendedor e marca `payment_status = paid`.
+5. A página pública `/pedido/<public_token>` mostra o status (polling) e o lojista recebe e-mail.
+
+### Testar
+
+1. Rode `supabase/up_seller_payments.sql`.
+2. Preencha as properties no GAS e publique **"Nova versão"** (mesmo deploy).
+3. Força uma loja de teste para o plano: `update stores set plan='pro' where id='<id>';`
+4. No painel, conecte a **sua** conta MP, monte um pedido na vitrine, gere o Pix e pague (valor mínimo). Confira o pedido virando "pago" e o e-mail.
+5. Pix no sandbox é limitado: o caminho confiável é testar em produção com valor baixo.
 
 ## GitHub Pages
 

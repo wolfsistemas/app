@@ -17,6 +17,7 @@ export const RESERVED_SLUGS = [
   'criar',
   'comecar',
   'painel',
+  'pedido',
   'api',
   'admin',
   'app',

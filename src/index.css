@@ -441,6 +441,9 @@ textarea { min-height: 90px; resize: vertical; }
 
 .chip-gold { background: #f6e8bf; color: #7a5c08; }
 .chip-rose { background: #f8e4df; color: var(--rose); }
+.chip.status-ok { background: #d9f0e1; color: var(--green); }
+.chip.status-wait { background: #fdf1cf; color: #8a6d1a; }
+.chip.status-bad { background: #f8e4df; color: var(--rose); }
 .card-gold { border-color: var(--gold-2); box-shadow: 0 18px 50px rgba(201, 162, 39, 0.18); }
 .list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; line-height: 1.8; }
 

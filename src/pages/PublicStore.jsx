@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { localDb } from '../lib/local.js'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import { isProStore, money, uid } from '../lib/format.js'
 import { buildOrderMessage, whatsappUrl } from '../lib/whatsapp.js'
+import { createPix } from '../lib/payments.js'
 import Brand from '../components/Brand.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
 
 export default function PublicStore() {
   const { slug } = useParams()
+  const navigate = useNavigate()
   const showToast = useToast()
   const [store, setStore] = useState(null)
   const [products, setProducts] = useState([])
@@ -88,6 +90,7 @@ export default function PublicStore() {
     if (!customer.name || sending) return
     setSending(true)
     let orderCode = ''
+    let created = null
     const order = {
       store_id: store.id,
       customer_name: customer.name,
@@ -108,6 +111,7 @@ export default function PublicStore() {
           p_note: order.note,
           p_total: order.total
         })
+        created = data || null
         orderCode = data?.code ? String(data.code) : ''
       } catch {
         // o WhatsApp é a fonte da verdade; pedido no banco é bônus
@@ -115,6 +119,23 @@ export default function PublicStore() {
     } else {
       localDb.saveOrder({ ...order, id: uid('order') })
     }
+
+    // Pro com Mercado Pago conectado: cobra Pix na conta do vendedor e leva
+    // o cliente para a página do pedido (confirmação automática).
+    if (isSupabase && store.mp_connected && created?.id && created.public_token) {
+      try {
+        await createPix({ storeId: store.id, orderId: created.id })
+        setCheckout(false)
+        setCart([])
+        setCustomer({ name: '', phone: '', note: '' })
+        setSending(false)
+        navigate(`/pedido/${created.public_token}`)
+        return
+      } catch {
+        showToast('Não deu para gerar o Pix agora. Vamos enviar pelo WhatsApp.', 'info', 4000)
+      }
+    }
+
     const text = buildOrderMessage({
       store,
       items: cart,
@@ -276,9 +297,13 @@ export default function PublicStore() {
             <input placeholder="Seu nome" required value={customer.name} onChange={(e) => setCustomer({ ...customer, name: e.target.value })} />
             <input placeholder="Seu WhatsApp (opcional)" value={customer.phone} onChange={(e) => setCustomer({ ...customer, phone: e.target.value })} />
             <textarea placeholder="Observação (tamanho, entrega...)" value={customer.note} onChange={(e) => setCustomer({ ...customer, note: e.target.value })} />
-            {isProStore(store) && store.pix_key && <p className="help">A chave PIX vai junto no texto do WhatsApp.</p>}
+            {store.mp_connected ? (
+              <p className="help">Você vai pagar com Pix e o pedido é confirmado automaticamente.</p>
+            ) : (
+              isProStore(store) && store.pix_key && <p className="help">A chave PIX vai junto no texto do WhatsApp.</p>
+            )}
             <button className="btn btn-whats" disabled={!customer.name || sending} onClick={sendOrder}>
-              {sending ? 'Enviando...' : 'Enviar no WhatsApp'}
+              {sending ? 'Enviando...' : store.mp_connected ? 'Gerar Pix e confirmar' : 'Enviar no WhatsApp'}
             </button>
           </div>
         </div>

@@ -7,6 +7,7 @@ import PhotoInput from '../components/PhotoInput.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { cancelSubscription, createCheckout, createSubscription, syncSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
+import { connectMp, disconnectMp } from '../lib/payments.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
 
 function beep() {
@@ -49,9 +50,11 @@ export default function Dashboard() {
   const showToast = useToast()
   const [billingBusy, setBillingBusy] = useState(false)
   const [subBusy, setSubBusy] = useState(false)
+  const [mpBusy, setMpBusy] = useState(false)
   const [mpSubAvailable, setMpSubAvailable] = useState(false)
   const url = publicUrl(store.slug)
   const isPro = isProStore(store)
+  const mpConnected = Boolean(store.mp_connected)
   const planEnd = planExpiresAt(store)
   const limitHit = !isPro && products.length >= FREE_PRODUCT_LIMIT
   const subActive = isPro && store.mp_subscription_status === 'authorized'
@@ -94,6 +97,19 @@ export default function Dashboard() {
       }
     }
     return undefined
+  }, [location.search])
+
+  useEffect(() => {
+    const q = new URLSearchParams(location.search)
+    const mp = q.get('mp')
+    if (!mp) return
+    navigate('/painel', { replace: true })
+    if (mp === 'connected') {
+      setMsg('Mercado Pago conectado! Agora os pedidos aceitam Pix com confirmação automática.')
+      refresh()
+    } else if (mp === 'error') {
+      setError('Não foi possível conectar o Mercado Pago. Tente de novo.')
+    }
   }, [location.search])
 
   useEffect(() => {
@@ -197,6 +213,35 @@ export default function Dashboard() {
       setMsg('Plano ativado neste ambiente para testes.')
     } catch (err) {
       setError(err.message || 'Falha ao ativar.')
+    }
+  }
+
+  async function connectMpAccount() {
+    setError('')
+    setMsg('')
+    setMpBusy(true)
+    try {
+      const redirectUrl = `${window.location.origin}${import.meta.env.BASE_URL}`
+      const link = await connectMp({ storeId, redirectUrl })
+      window.location.href = link
+    } catch (err) {
+      setError(err.message || 'Não foi possível conectar ao Mercado Pago.')
+      setMpBusy(false)
+    }
+  }
+
+  async function disconnectMpAccount() {
+    if (!window.confirm('Desconectar o Mercado Pago? A loja volta a exibir apenas a chave PIX manual.')) return
+    setError('')
+    setMpBusy(true)
+    try {
+      await disconnectMp({ storeId })
+      await refresh()
+      showToast('Mercado Pago desconectado', 'ok')
+    } catch (err) {
+      setError(err.message || 'Não foi possível desconectar.')
+    } finally {
+      setMpBusy(false)
     }
   }
 
@@ -533,6 +578,30 @@ export default function Dashboard() {
         )}
 
         {tab === 'plano' && (
+          <>
+          <section className="card pad stack" style={{ marginBottom: 16 }}>
+            <div className="between">
+              <h3 style={{ margin: 0 }}>Recebimentos</h3>
+              {isPro && <span className="chip">{mpConnected ? 'Mercado Pago conectado' : 'Sem conexão'}</span>}
+            </div>
+            {!isPro ? (
+              <p className="help">Conecte sua conta do Mercado Pago para receber Pix com confirmação automática. Disponível no Plano Loja.</p>
+            ) : mpConnected ? (
+              <>
+                <p className="help">O valor cai direto na sua conta do Mercado Pago. O VitrineZap só confirma o pagamento — não fica com o seu dinheiro.</p>
+                <button className="btn btn-ghost" disabled={mpBusy} onClick={disconnectMpAccount}>
+                  {mpBusy ? 'Aguarde...' : 'Desconectar Mercado Pago'}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="help">Conecte sua conta do Mercado Pago para que o cliente pague por Pix e o pedido seja confirmado sozinho. O dinheiro vai direto para você.</p>
+                <button className="btn btn-gold" disabled={mpBusy || !billingUrl} onClick={connectMpAccount}>
+                  {mpBusy ? 'Abrindo Mercado Pago...' : 'Conectar Mercado Pago'}
+                </button>
+              </>
+            )}
+          </section>
           <section className="grid-2">
             <article className="card pad stack">
               <h3>Grátis</h3>
@@ -607,6 +676,7 @@ export default function Dashboard() {
               </p>
             </article>
           </section>
+          </>
         )}
       </main>
     </div>

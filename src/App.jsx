@@ -5,6 +5,7 @@ import Auth from './pages/Auth.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import PublicStore from './pages/PublicStore.jsx'
+import Order from './pages/Order.jsx'
 import Analytics from './components/Analytics.jsx'
 import { ToastProvider } from './components/Toast.jsx'
 import { useAuth } from './lib/AuthContext.jsx'
@@ -42,6 +43,7 @@ export default function App() {
               </Guard>
             }
           />
+          <Route path="/pedido/:token" element={<Order />} />
           <Route path="/:slug" element={<PublicStore />} />
         </Routes>
       </ToastProvider>
