@@ -122,17 +122,25 @@ export default function PublicStore() {
 
     // Pro com Mercado Pago conectado: cobra Pix na conta do vendedor e leva
     // o cliente para a página do pedido (confirmação automática).
-    if (isSupabase && store.mp_connected && created?.id && created.public_token) {
-      try {
-        await createPix({ storeId: store.id, orderId: created.id })
-        setCheckout(false)
-        setCart([])
-        setCustomer({ name: '', phone: '', note: '' })
-        setSending(false)
-        navigate(`/pedido/${created.public_token}`)
-        return
-      } catch {
-        showToast('Não deu para gerar o Pix agora. Vamos enviar pelo WhatsApp.', 'info', 4000)
+    if (isSupabase && store.mp_connected) {
+      if (!created?.id) {
+        showToast('Não deu para registrar o pedido no banco. Enviando pelo WhatsApp.', 'info', 7000)
+      } else if (!created.public_token) {
+        console.error('public_token ausente no pedido — rode supabase/up_seller_payments.sql')
+        showToast('Banco desatualizado (public_token). Rode a migração up_seller_payments.sql.', 'info', 8000)
+      } else {
+        try {
+          await createPix({ storeId: store.id, orderId: created.id })
+          setCheckout(false)
+          setCart([])
+          setCustomer({ name: '', phone: '', note: '' })
+          setSending(false)
+          navigate(`/pedido/${created.public_token}`)
+          return
+        } catch (err) {
+          console.error('create_pix falhou:', err)
+          showToast(`Pix falhou: ${err?.message || 'erro desconhecido'}. Enviando pelo WhatsApp.`, 'info', 9000)
+        }
       }
     }
 
