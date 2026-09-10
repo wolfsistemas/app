@@ -826,7 +826,11 @@ function handleCreatePix(body) {
   var res = UrlFetchApp.fetch('https://api.mercadopago.com/v1/payments', {
     method: 'post',
     contentType: 'application/json',
-    headers: { Authorization: 'Bearer ' + token },
+    headers: {
+      Authorization: 'Bearer ' + token,
+      // Obrigatório na API de Pagamentos; fixo por pedido para evitar cobrança dupla.
+      'X-Idempotency-Key': 'vitrinezap-order-' + orderId
+    },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   })
