@@ -66,6 +66,15 @@ export async function refundPayment({ storeId, orderId }) {
   })
 }
 
+// Avisa o cliente por e-mail com o link do pedido (envia só uma vez).
+export async function notifyOrder({ storeId, orderId }) {
+  return postBilling({
+    action: 'order_notify',
+    store_id: storeId,
+    order_id: orderId
+  })
+}
+
 // Lê o pedido pelo token público (RPC anônima, sem expor a tabela orders).
 export async function getOrderPublic(token) {
   if (!isSupabase || !token) return null

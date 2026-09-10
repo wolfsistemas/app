@@ -40,7 +40,7 @@ Sem `.env`, o app usa **modo local** (dados no navegador + loja demo).
 
 1. Crie um projeto no Supabase.
 2. No SQL Editor, rode nesta ordem: `supabase/schema.sql`, `supabase/rls.sql`, `supabase/storage.sql`.
-3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`. Para o Pix na conta do vendedor (OAuth), rode `supabase/up_seller_payments.sql`.
+3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`. Para o Pix na conta do vendedor (OAuth), rode `supabase/up_seller_payments.sql`. Para o e-mail de retomada do cliente, rode `supabase/up_order_notify.sql`.
 4. Em Authentication > Providers, deixe e-mail/senha ligado. Para testar rápido, desligue **Confirm email**.
 5. Em Authentication > URL configuration: Site URL e Redirect URLs apontando para o endereço do app (`https://wolfsistemas.github.io/app/**`).
 6. Copie `.env.example` para `.env` e preencha URL + anon key.
@@ -109,7 +109,7 @@ No painel de developers, na aplicação:
 
 ### Script Properties no GAS
 
-`MP_CLIENT_ID`, `MP_CLIENT_SECRET` (segredo — só aqui), `MP_REDIRECT_URI` (a mesma URL cadastrada). O `MP_ACCESS_TOKEN` continua sendo o seu token (assinatura do plano); o token do vendedor fica no banco (`store_payments`, privada, só `service_role`).
+`MP_CLIENT_ID`, `MP_CLIENT_SECRET` (segredo — só aqui), `MP_REDIRECT_URI` (a mesma URL cadastrada). O `MP_ACCESS_TOKEN` continua sendo o seu token (assinatura do plano); o token do vendedor fica no banco (`store_payments`, privada, só `service_role`). Defina também `APP_URL` (URL do site, ex.: `https://wolfsistemas.github.io/app`) para que os e-mails incluam o link do pedido.
 
 ### Fluxo
 
@@ -120,10 +120,11 @@ No painel de developers, na aplicação:
 5. A página pública `/pedido/<public_token>` mostra o status (polling) e o lojista recebe e-mail.
 6. O cliente acompanha o pedido na mesma página (recebido, em preparo, enviado, entregue) e fala com a loja pelo WhatsApp; se o Pix vencer, ele gera um novo ali mesmo (`action=create_pix` com `renew`).
 7. No painel, o lojista vê o **pagamento** (Pago/Aguardando) e avança a **situação** (aceitar, enviar, confirmar entrega). Cancelar um pedido pago dispara o **estorno** na conta dele (`action=refund_payment`).
+8. Retomada do cliente: se ele informar o e-mail no checkout, recebe o link do pedido (`action=order_notify` / `create_pix`); e a vitrine guarda os pedidos recentes no aparelho, com o atalho **Meus pedidos recentes**.
 
 ### Testar
 
-1. Rode `supabase/up_seller_payments.sql`.
+1. Rode `supabase/up_seller_payments.sql` e `supabase/up_order_notify.sql`.
 2. Preencha as properties no GAS e publique **"Nova versão"** (mesmo deploy).
 3. Força uma loja de teste para o plano: `update stores set plan='pro' where id='<id>';`
 4. No painel, conecte a **sua** conta MP, monte um pedido na vitrine, gere o Pix e pague (valor mínimo). Confira o pedido virando "pago" e o e-mail.

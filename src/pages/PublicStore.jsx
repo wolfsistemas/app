@@ -4,7 +4,8 @@ import { localDb } from '../lib/local.js'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import { isProStore, money, uid } from '../lib/format.js'
 import { buildOrderMessage, whatsappUrl } from '../lib/whatsapp.js'
-import { createPix } from '../lib/payments.js'
+import { createPix, notifyOrder } from '../lib/payments.js'
+import { recentOrders, rememberOrder } from '../lib/recentOrders.js'
 import Brand from '../components/Brand.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
@@ -19,7 +20,7 @@ export default function PublicStore() {
   const [category, setCategory] = useState('todos')
   const [zoom, setZoom] = useState('')
   const [checkout, setCheckout] = useState(false)
-  const [customer, setCustomer] = useState({ name: '', phone: '', note: '' })
+  const [customer, setCustomer] = useState({ name: '', phone: '', email: '', note: '' })
   const [missing, setMissing] = useState(false)
   const [sending, setSending] = useState(false)
 
@@ -57,6 +58,7 @@ export default function PublicStore() {
   }, [slug])
 
   const cats = useMemo(() => ['todos', ...new Set(products.map((p) => p.category || 'Geral'))], [products])
+  const recent = useMemo(() => recentOrders(slug), [slug])
   const visible = products.filter((p) => category === 'todos' || p.category === category)
   const total = cart.reduce((s, i) => s + Number(i.price) * i.qty, 0)
   const count = cart.reduce((s, i) => s + i.qty, 0)
@@ -95,6 +97,7 @@ export default function PublicStore() {
       store_id: store.id,
       customer_name: customer.name,
       customer_phone: customer.phone || '',
+      customer_email: customer.email || '',
       items: cart.map(({ name, qty, price }) => ({ name, qty, price })),
       note: customer.note,
       total,
@@ -103,16 +106,21 @@ export default function PublicStore() {
     }
     if (isSupabase) {
       try {
-        const { data } = await supabase.rpc('create_order', {
+        const baseArgs = {
           p_store_id: order.store_id,
           p_customer_name: order.customer_name,
           p_customer_phone: order.customer_phone,
           p_items: order.items,
           p_note: order.note,
           p_total: order.total
-        })
-        created = data || null
-        orderCode = data?.code ? String(data.code) : ''
+        }
+        let res = await supabase.rpc('create_order', { ...baseArgs, p_customer_email: order.customer_email })
+        if (res.error) {
+          // Banco sem up_order_notify.sql: tenta sem o e-mail.
+          res = await supabase.rpc('create_order', baseArgs)
+        }
+        created = res.data || null
+        orderCode = res.data?.code ? String(res.data.code) : ''
       } catch {
         // o WhatsApp é a fonte da verdade; pedido no banco é bônus
       }
@@ -130,10 +138,17 @@ export default function PublicStore() {
         showToast('Banco desatualizado (public_token). Rode a migração up_seller_payments.sql.', 'info', 8000)
       } else {
         try {
-          await createPix({ storeId: store.id, orderId: created.id })
+          rememberOrder({
+            token: created.public_token,
+            slug: store.slug,
+            code: created.code || '',
+            total,
+            at: Date.now()
+          })
+          await createPix({ storeId: store.id, orderId: created.id, payerEmail: customer.email || '' })
           setCheckout(false)
           setCart([])
-          setCustomer({ name: '', phone: '', note: '' })
+          setCustomer({ name: '', phone: '', email: '', note: '' })
           setSending(false)
           navigate(`/pedido/${created.public_token}`)
           return
@@ -142,6 +157,11 @@ export default function PublicStore() {
           showToast(`Pix falhou: ${err?.message || 'erro desconhecido'}. Enviando pelo WhatsApp.`, 'info', 9000)
         }
       }
+    }
+
+    // Avisa o cliente por e-mail (link do pedido), quando informado.
+    if (isSupabase && created?.id && customer.email) {
+      notifyOrder({ storeId: store.id, orderId: created.id }).catch(() => {})
     }
 
     const text = buildOrderMessage({
@@ -163,7 +183,7 @@ export default function PublicStore() {
     }
     setCheckout(false)
     setCart([])
-    setCustomer({ name: '', phone: '', note: '' })
+    setCustomer({ name: '', phone: '', email: '', note: '' })
     setSending(false)
   }
 
@@ -270,6 +290,17 @@ export default function PublicStore() {
             </article>
           ))}
         </div>
+        {recent.length > 0 && (
+          <section className="card pad stack" style={{ marginTop: 18 }}>
+            <strong>Seus pedidos recentes</strong>
+            {recent.slice(0, 3).map((o) => (
+              <Link className="between" key={o.token} to={`/pedido/${o.token}`}>
+                <span>Pedido {o.code ? `nº ${String(o.code).padStart(3, '0')}` : ''}</span>
+                <span className="muted">{o.total ? money(o.total) : ''}</span>
+              </Link>
+            ))}
+          </section>
+        )}
         {isFree && (
           <p className="center tiny" style={{ marginTop: 28 }}>
             <Link to="/criar" className="muted">Criado com VitrineZap — remova a nossa marca no Plano Loja.</Link>
@@ -304,6 +335,7 @@ export default function PublicStore() {
             <strong>Total {money(total)}</strong>
             <input placeholder="Seu nome" required value={customer.name} onChange={(e) => setCustomer({ ...customer, name: e.target.value })} />
             <input placeholder="Seu WhatsApp (opcional)" value={customer.phone} onChange={(e) => setCustomer({ ...customer, phone: e.target.value })} />
+            <input type="email" placeholder="Seu e-mail (opcional, para acompanhar)" value={customer.email} onChange={(e) => setCustomer({ ...customer, email: e.target.value })} />
             <textarea placeholder="Observação (tamanho, entrega...)" value={customer.note} onChange={(e) => setCustomer({ ...customer, note: e.target.value })} />
             {store.mp_connected ? (
               <p className="help">Você vai pagar com Pix e o pedido é confirmado automaticamente.</p>

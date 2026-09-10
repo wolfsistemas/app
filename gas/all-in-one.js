@@ -567,6 +567,83 @@ function fetchOwnerEmail(ownerId) {
   }
 }
 
+// URL base do site (para montar links nos e-mails).
+function appUrl() {
+  return String(props().getProperty('APP_URL') || '').trim().replace(/\/+$/, '')
+}
+
+function orderPublicLink(order) {
+  var base = appUrl()
+  if (!base || !order || !order.public_token) return ''
+  return base + '/pedido/' + order.public_token
+}
+
+function isEmail(value) {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(value || '').trim())
+}
+
+function formatBrl(value) {
+  return 'R$ ' + Number(value || 0).toFixed(2).replace('.', ',')
+}
+
+// Avisa o cliente com o link do pedido (uma vez). Evita spam: so envia para o
+// e-mail gravado no proprio pedido e marca customer_notified_at.
+function sendCustomerOrderEmail(order, storeName) {
+  var to = String(order.customer_email || '').trim()
+  if (!isEmail(to)) return false
+  if (order.customer_notified_at) return false
+  var code = order.code ? '#' + order.code : order.id
+  var link = orderPublicLink(order)
+  var lines = [
+    'Ola' + (order.customer_name ? ' ' + order.customer_name : '') + '!',
+    '',
+    'Seu pedido ' + code + (storeName ? ' na ' + storeName : '') + ' foi registrado.',
+    'Total: ' + formatBrl(order.total),
+    ''
+  ]
+  if (order.payment_status === 'pending' && order.payment_method === 'pix') {
+    lines.push('Falta concluir o pagamento por Pix.')
+    lines.push('Abra o pedido pelo link e pague na hora:')
+  } else {
+    lines.push('Acompanhe o andamento do pedido pelo link:')
+  }
+  if (link) {
+    lines.push(link)
+  } else {
+    lines.push('(Peca o link do pedido para a loja.)')
+  }
+  lines.push('')
+  lines.push('Qualquer duvida, fale com a loja pelo WhatsApp.')
+  var body = lines.join('\n')
+  try {
+    MailApp.sendEmail(to, '[VitrineZap] Pedido ' + code + (storeName ? ' - ' + storeName : ''), body)
+  } catch (err) {
+    notify('Falha ao enviar e-mail do pedido ao cliente', String(err) + '\n' + body)
+    return false
+  }
+  try {
+    sbFetch('/orders?id=eq.' + encodeURIComponent(order.id), {
+      method: 'patch',
+      prefer: 'return=minimal',
+      payload: { customer_notified_at: new Date().toISOString() }
+    })
+  } catch (err) { /* nao critico */ }
+  return true
+}
+
+// Aviso publico do pedido (apos criar). So envia ao e-mail ja gravado no pedido.
+function handleOrderNotify(body) {
+  var storeId = String(body.store_id || '')
+  var orderId = String(body.order_id || '')
+  if (!storeId || !orderId) return { ok: false, error: 'store_id/order_id ausentes' }
+  var orders = sbFetch('/orders?id=eq.' + encodeURIComponent(orderId) + '&select=*&limit=1')
+  var order = orders && orders.length ? orders[0] : null
+  if (!order) return { ok: false, error: 'Pedido nao encontrado' }
+  if (String(order.store_id) !== storeId) return { ok: false, error: 'Pedido nao pertence a loja' }
+  var store = fetchStoreOwner(storeId)
+  return { ok: true, sent: sendCustomerOrderEmail(order, store && store.name) }
+}
+
 // Valida que o JWT do usuario logado e o dono da loja (evita sequestrar a loja).
 function assertStoreOwner(storeId, jwt) {
   var row = fetchStoreOwner(storeId)
@@ -877,6 +954,11 @@ function handleCreatePix(body) {
     }
   })
 
+  // Avisa o cliente com o link (uma vez), ja com o Pix pronto.
+  order.payment_status = 'pending'
+  order.payment_method = 'pix'
+  sendCustomerOrderEmail(order, store && store.name)
+
   return {
     ok: true,
     payment_id: String(parsed.id),
@@ -969,21 +1051,32 @@ function updateOrderPayment(orderId, payment) {
 }
 
 function notifyOrderPaid(order, payment) {
-  var amount = payment.transaction_amount || order.total || '-'
+  var amount = Number(payment.transaction_amount || order.total || 0)
   var store = fetchStoreOwner(order.store_id)
-  var body =
-    'Pedido ' + (order.code ? '#' + order.code : order.id) + ' pago!\n\n' +
-    'Valor: R$ ' + amount + '\n' +
-    'Cliente: ' + (order.customer_name || '-') + '\n' +
-    'Fone: ' + (order.customer_phone || '-') + '\n' +
-    'Loja: ' + (store && store.name ? store.name : order.store_id)
+  var storeName = store && store.name ? store.name : order.store_id
+  var link = orderPublicLink(order)
+  var phone = String(order.customer_phone || '').replace(/\D/g, '')
+  var lines = [
+    'Pedido ' + (order.code ? '#' + order.code : order.id) + ' PAGO',
+    '',
+    'Valor: ' + formatBrl(amount),
+    'Cliente: ' + (order.customer_name || '-'),
+    'Fone: ' + (order.customer_phone || '-'),
+    'Loja: ' + storeName
+  ]
+  if (phone) lines.push('WhatsApp do cliente: https://wa.me/' + phone)
+  if (link) {
+    lines.push('')
+    lines.push('Abra o pedido: ' + link)
+  }
+  var body = lines.join('\n')
   var to = fetchOwnerEmail(store && store.owner_id)
   if (!to) {
     notify('Pedido pago (sem e-mail do lojista)', body)
     return
   }
   try {
-    MailApp.sendEmail(to, '[VitrineZap] Pedido pago', body)
+    MailApp.sendEmail(to, '[VitrineZap] Pedido ' + (order.code ? '#' + order.code + ' ' : '') + 'pago - ' + formatBrl(amount), body)
   } catch (err) {
     notify('Falha ao avisar lojista de pedido pago', String(err) + '\n' + body)
   }
@@ -1407,6 +1500,9 @@ function doPost(e) {
     } else if (body.action === 'refund_payment') {
       log.action = 'refund_payment'
       result = handleRefundOrder(body)
+    } else if (body.action === 'order_notify') {
+      log.action = 'order_notify'
+      result = handleOrderNotify(body)
     } else if (body.action === 'upload' || body.image) {
       log.action = 'upload'
       result = handleUpload(body)
