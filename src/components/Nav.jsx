@@ -4,7 +4,7 @@ import { useAuth } from '../lib/AuthContext.jsx'
 import Brand from './Brand.jsx'
 
 export default function Nav() {
-  const { user, store } = useAuth()
+  const { user, store, signOut } = useAuth()
   return (
     <header className="nav">
       <div className="wrap between" style={{ padding: '12px 0' }}>
@@ -12,9 +12,12 @@ export default function Nav() {
         <div className="row">
           <a className="hide-sm" href={`${import.meta.env.BASE_URL}#preco`}>Preço</a>
           {user ? (
-            <Link className="btn btn-dark" to={store ? '/painel' : '/comecar'}>
-              Painel
-            </Link>
+            <>
+              <Link className="btn btn-dark" to={store ? '/painel' : '/comecar'}>
+                {store ? 'Painel' : 'Terminar cadastro'}
+              </Link>
+              <button className="btn btn-ghost" onClick={signOut}>Sair</button>
+            </>
           ) : (
             <>
               <Link className="btn btn-ghost" to="/entrar">Entrar</Link>
