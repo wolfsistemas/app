@@ -304,13 +304,12 @@ textarea { min-height: 90px; resize: vertical; }
   position: relative;
   width: 120px;
 }
-.photo-thumb img {
+.photo-thumb .photo-preview {
   width: 120px;
   height: 120px;
-  object-fit: cover;
   border-radius: 16px;
   border: 1px solid var(--line);
-  background: #eee;
+  background-color: #eee;
 }
 .photo-remove {
   position: absolute;

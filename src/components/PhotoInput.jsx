@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
 import { uploadPhoto } from '../lib/upload.js'
+import PImg from './PImg.jsx'
 
 export default function PhotoInput({ label, value, onChange }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [pasteOpen, setPasteOpen] = useState(false)
 
   async function onFile(e) {
     const file = e.target.files?.[0]
@@ -27,7 +27,7 @@ export default function PhotoInput({ label, value, onChange }) {
       <label>{label}</label>
       {value && (
         <div className="photo-thumb">
-          <img src={value} alt="" />
+          <PImg className="photo-preview" src={value} alt="" />
           <button
             type="button"
             className="photo-remove"
@@ -44,13 +44,7 @@ export default function PhotoInput({ label, value, onChange }) {
           {busy ? 'Enviando...' : value ? 'Trocar foto' : 'Adicionar foto'}
           <input type="file" accept="image/*" onChange={onFile} disabled={busy} style={{ display: 'none' }} />
         </label>
-        <button type="button" className="btn btn-ghost" onClick={() => setPasteOpen((v) => !v)}>
-          {pasteOpen ? 'Ocultar link' : 'Usar link'}
-        </button>
       </div>
-      {pasteOpen && (
-        <input value={value || ''} onChange={(e) => onChange(e.target.value)} placeholder="https://" autoFocus />
-      )}
       <div className="help">{busy ? 'Enviando foto...' : 'Sobe um arquivo do seu aparelho.'}</div>
       {error && <div className="error">{error}</div>}
     </div>
