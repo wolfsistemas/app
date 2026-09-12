@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0B3D2C" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/app/manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="/app/icon-192.png" />
+    <link rel="apple-touch-icon" href="/app/icon-192.png" />
+    <meta name="description" content="Monte sua vitrine, cole o link na bio e receba o pedido pronto no WhatsApp." />
+    <title>VitrineZap — catálogo no WhatsApp</title>
+    <script>
+      (function (l) {
+        if (l.search[1] === '/') {
+          var decoded = l.search
+            .slice(1)
+            .split('&')
+            .map(function (s) {
+              return s.replace(/~and~/g, '&')
+            })
+            .join('?')
+          window.history.replaceState(null, null, l.pathname.slice(0, -1) + decoded + l.hash)
+        }
+      })(window.location)
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script type="module" crossorigin src="/app/assets/index-Da6spd7b.js"></script>
+    <link rel="stylesheet" crossorigin href="/app/assets/index-W8U_BBDx.css">
+      <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="VitrineZap" />
+    <meta property="og:title" content="VitrineZap — catálogo no WhatsApp" />
+    <meta property="og:description" content="Monte sua vitrine, cole o link na bio e receba o pedido pronto no WhatsApp." />
+    <meta property="og:image" content="https://wolfsistemas.github.io/app/icon-512.png" />
+    <meta property="og:url" content="https://wolfsistemas.github.io/app/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="VitrineZap — catálogo no WhatsApp" />
+    <meta name="twitter:description" content="Monte sua vitrine, cole o link na bio e receba o pedido pronto no WhatsApp." />
+    <meta name="twitter:image" content="https://wolfsistemas.github.io/app/icon-512.png" />
+    <link rel="canonical" href="https://wolfsistemas.github.io/app/" />
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"VitrineZap","url":"https://wolfsistemas.github.io/app/"}</script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
