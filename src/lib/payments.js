@@ -81,6 +81,12 @@ export async function testPush({ storeId }) {
   return postBilling({ action: 'push_test', store_id: storeId, access_token })
 }
 
+// Exclui a conta e toda a loja (LGPD). As fotos são removidas antes pelo cliente.
+export async function deleteAccount({ storeId }) {
+  const access_token = await authToken()
+  return postBilling({ action: 'delete_account', store_id: storeId, access_token })
+}
+
 // Lê o pedido pelo token público (RPC anônima, sem expor a tabela orders).
 export async function getOrderPublic(token) {
   if (!isSupabase || !token) return null

@@ -102,3 +102,15 @@ export async function uploadPhoto(file) {
 
   return uploadViaSupabaseStorage(blob, file)
 }
+
+// Remove todas as fotos do usuário logado no Storage (usado ao excluir a conta).
+export async function deleteAllMyPhotos() {
+  if (!isSupabase) return
+  const { data: authData } = await supabase.auth.getUser()
+  const uid = authData?.user?.id
+  if (!uid) return
+  const { data: files, error } = await supabase.storage.from(FOTOS_BUCKET).list(uid, { limit: 1000 })
+  if (error || !files || !files.length) return
+  const paths = files.map((f) => `${uid}/${f.name}`)
+  await supabase.storage.from(FOTOS_BUCKET).remove(paths)
+}

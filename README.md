@@ -41,7 +41,7 @@ Sem `.env`, o app usa **modo local** (dados no navegador + loja demo).
 1. Crie um projeto no Supabase.
 2. No SQL Editor, rode nesta ordem: `supabase/schema.sql`, `supabase/rls.sql`, `supabase/storage.sql`.
 3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`. Para o Pix na conta do vendedor (OAuth), rode `supabase/up_seller_payments.sql`. Para o e-mail de retomada do cliente, rode `supabase/up_order_notify.sql`.
-4. Em Authentication > Providers, deixe e-mail/senha ligado. Para testar rápido, desligue **Confirm email**.
+4. Em Authentication > Providers, deixe e-mail/senha ligado. Ligue **Confirm email** e cole os templates em PT-BR de `supabase/email-templates/` (veja o README da pasta). Em dev, se quiser testar rápido, pode desligar o Confirm email.
 5. Em Authentication > URL configuration: Site URL e Redirect URLs apontando para o endereço do app (`https://wolfsistemas.github.io/app/**`).
 6. Copie `.env.example` para `.env` e preencha URL + anon key.
 
@@ -190,6 +190,31 @@ O que já existe no app:
 Importante: os textos legais são modelos e **não substituem a revisão de um advogado**. Ajuste
 conforme o seu tipo de empresa (MEI, LTDA, pessoa física) e sua operação real. Ao revisar, atualize
 `TERMS_VERSION` em `src/lib/site.js`.
+
+## Confirmação de e-mail e exclusão de conta (LGPD)
+
+### Confirmação de e-mail
+
+Com **Confirm email** ligado no Supabase, o cadastro mostra a tela "Confirme seu e-mail" e o usuário só
+entra depois de clicar no link. O front reenvia o link (`supabase.auth.resend`, tipo `signup`).
+
+- Templates em PT-BR: `supabase/email-templates/` (confirm signup, reset password, magic link, change
+  email, invite). Cole cada um no Dashboard > Authentication > Email Templates.
+- Para produção, configure um **SMTP próprio** (Resend, Brevo, SendGrid, SES) com SPF/DKIM — o SMTP
+  padrão do Supabase tem limite baixo e cai em spam. Detalhes no README da pasta.
+
+### Exclusão de conta
+
+No painel, aba **Plano**, o lojista pode excluir a conta e os dados definitivamente:
+
+1. O cliente apaga as fotos do usuário no Supabase Storage (`deleteAllMyPhotos` em `src/lib/upload.js`).
+2. Chama o GAS com `action=delete_account`, que valida o dono (JWT) e remove o **usuário de auth** via
+   Admin API. As chaves estrangeiras usam `ON DELETE CASCADE` (`auth.users → stores → products/orders/
+   store_payments/push_subscriptions`), então o banco fica limpo.
+3. A sessão é encerrada e o usuário volta para a home.
+
+O botão pede confirmação dupla (aviso + digitar `EXCLUIR`). A Política de Privacidade documenta o fluxo
+(seção 7). Recurso coberto pelo GAS `handleDeleteAccount`.
 
 ## OG e SEO das vitrines
 

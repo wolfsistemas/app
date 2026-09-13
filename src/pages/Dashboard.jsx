@@ -7,7 +7,8 @@ import PhotoInput from '../components/PhotoInput.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { cancelSubscription, createCheckout, createSubscription, syncSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
-import { connectMp, disconnectMp, refundPayment, testPush } from '../lib/payments.js'
+import { connectMp, deleteAccount, disconnectMp, refundPayment, testPush } from '../lib/payments.js'
+import { deleteAllMyPhotos } from '../lib/upload.js'
 import { disablePush, enablePush, hasLocalPushSubscription, pushSupported } from '../lib/push.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
 
@@ -81,6 +82,7 @@ export default function Dashboard() {
   const [mpSubAvailable, setMpSubAvailable] = useState(false)
   const [pushOn, setPushOn] = useState(false)
   const [pushBusy, setPushBusy] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const url = publicUrl(store.slug)
   const isPro = isProStore(store)
   const mpConnected = Boolean(store.mp_connected)
@@ -230,6 +232,32 @@ export default function Dashboard() {
       showToast(err.message || 'Falha ao enviar o teste.', 'bad')
     } finally {
       setPushBusy(false)
+    }
+  }
+
+  async function removeAccount() {
+    if (deleting) return
+    const first = window.confirm(
+      'Excluir sua conta apaga a vitrine, os produtos, os pedidos e as fotos para sempre. Não tem como desfazer. Deseja continuar?'
+    )
+    if (!first) return
+    const typed = window.prompt('Para confirmar a exclusão, digite EXCLUIR em maiúsculas:')
+    if (typed !== 'EXCLUIR') {
+      showToast('Exclusão cancelada.', 'info')
+      return
+    }
+    setError('')
+    setDeleting(true)
+    try {
+      await deleteAllMyPhotos()
+      await deleteAccount({ storeId })
+      showToast('Conta excluída. Até logo!', 'ok')
+      await signOut()
+      navigate('/', { replace: true })
+    } catch (err) {
+      setError(err.message || 'Não foi possível excluir a conta.')
+      showToast(err.message || 'Não foi possível excluir a conta.', 'bad')
+      setDeleting(false)
     }
   }
 
@@ -838,6 +866,16 @@ export default function Dashboard() {
                   : 'Pagamento avulso via link seguro (Pix ou cartão): na confirmação, o plano é liberado automaticamente por 30 dias via webhook.'}
               </p>
             </article>
+          </section>
+          <section className="card pad stack" style={{ marginTop: 16, borderColor: '#e6b0aa' }}>
+            <h3 style={{ margin: 0 }}>Excluir conta</h3>
+            <p className="help">
+              Apaga definitivamente sua conta, a vitrine, os produtos, os pedidos e as fotos. Esta ação
+              não pode ser desfeita. Se quiser, exporte antes as informações da sua loja.
+            </p>
+            <button className="btn btn-ghost" disabled={deleting} onClick={removeAccount}>
+              {deleting ? 'Excluindo...' : 'Excluir minha conta e meus dados'}
+            </button>
           </section>
           </>
         )}

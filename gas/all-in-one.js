@@ -1078,6 +1078,35 @@ function handleRefundOrder(body) {
   return { ok: true, refund_id: String(parsed.id) }
 }
 
+/* ---------------- LGPD: exclusao de conta e dados ----------------
+ * Apaga todos os dados do lojista. As chaves estrangeiras usam ON DELETE
+ * CASCADE (auth.users -> stores -> products/orders/store_payments/
+ * push_subscriptions), entao remover o usuario ja limpa o banco. As fotos do
+ * Storage sao removidas antes pelo proprio cliente.
+ */
+function handleDeleteAccount(body) {
+  var storeId = String(body.store_id || '')
+  if (!storeId) return { ok: false, error: 'store_id ausente' }
+  var check = assertStoreOwner(storeId, body.access_token)
+  if (!check.ok) return check
+  var ownerId = String(check.row.owner_id || '')
+  if (!ownerId) return { ok: false, error: 'Dono da loja nao encontrado' }
+
+  var cfg = sbBase()
+  var res = UrlFetchApp.fetch(cfg.url + '/auth/v1/admin/users/' + encodeURIComponent(ownerId), {
+    method: 'delete',
+    headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key },
+    muteHttpExceptions: true
+  })
+  var code = res.getResponseCode()
+  if (code >= 300 && code !== 404) {
+    notify('Falha ao excluir conta ' + ownerId, res.getContentText().slice(0, 500))
+    return { ok: false, error: 'Nao foi possivel excluir a conta agora. Tente de novo ou fale com o suporte.' }
+  }
+  notify('Conta excluida', 'Loja ' + storeId + ' (' + (check.row.name || '') + ') e usuario ' + ownerId + ' removidos.')
+  return { ok: true }
+}
+
 var MP_ORDER_STATUS = {
   approved: 'paid',
   pending: 'pending',
@@ -1562,6 +1591,9 @@ function doPost(e) {
     } else if (body.action === 'push_test') {
       log.action = 'push_test'
       result = handlePushTest(body)
+    } else if (body.action === 'delete_account') {
+      log.action = 'delete_account'
+      result = handleDeleteAccount(body)
     } else if (body.action === 'upload' || body.image) {
       log.action = 'upload'
       result = handleUpload(body)

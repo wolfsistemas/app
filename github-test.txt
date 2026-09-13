@@ -1,3 +1,0 @@
-Arquivo de teste criado para verificar o vinculo com o GitHub.
-Repositorio: wolfsistemas/app
-Data: 2026-09-04

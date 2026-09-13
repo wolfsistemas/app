@@ -75,6 +75,12 @@ export default function Privacy() {
           obrigações legais. Ao excluir a conta, os dados são eliminados ou anonimizados, ressalvadas
           as hipóteses de guarda obrigatória.
         </p>
+        <p>
+          Você pode excluir sua conta e seus dados a qualquer momento, direto no painel, em{' '}
+          <strong>Plano &gt; Excluir conta</strong>. A exclusão remove a vitrine, os produtos, os
+          pedidos, as fotos e a conta de acesso de forma permanente. Registros que a lei obriga a
+          manter (por exemplo, fiscais) podem ser conservados pelo prazo legal.
+        </p>
 
         <h2>8. Seus direitos (art. 18 da LGPD)</h2>
         <p>
