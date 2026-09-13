@@ -39,7 +39,12 @@ export default function Auth({ mode }) {
     try {
       if (view === 'signup') {
         if (!accept) throw new Error('Marque o aceite dos Termos e da Política de Privacidade para continuar.')
-        await signUp({ ...form, terms: { at: new Date().toISOString(), version: TERMS_VERSION } })
+        const result = await signUp({ ...form, terms: { at: new Date().toISOString(), version: TERMS_VERSION } })
+        if (result?.pending) {
+          setView('confirm')
+          setOk('Enviamos um link de confirmação para ' + form.email + '. Abra o e-mail para ativar sua conta.')
+          return
+        }
         navigate('/comecar')
         return
       }
@@ -67,7 +72,27 @@ export default function Auth({ mode }) {
     }
   }
 
-  const title = view === 'signup' ? 'Criar vitrine grátis' : view === 'forgot' ? 'Recuperar senha' : view === 'recover' ? 'Definir nova senha' : 'Entrar'
+  async function resend() {
+    setError('')
+    setOk('')
+    setBusy(true)
+    try {
+      if (!isSupabase) throw new Error('Reenvio disponível apenas com o Supabase configurado.')
+      const { error: resendError } = await supabase.auth.resend({
+        type: 'signup',
+        email: form.email,
+        options: { emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}entrar` }
+      })
+      if (resendError) throw resendError
+      setOk('Reenviamos o e-mail de confirmação.')
+    } catch (err) {
+      setError(err.message || 'Não foi possível reenviar agora.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const title = view === 'signup' ? 'Criar vitrine grátis' : view === 'forgot' ? 'Recuperar senha' : view === 'recover' ? 'Definir nova senha' : view === 'confirm' ? 'Confirme seu e-mail' : 'Entrar'
   const subtitle =
     view === 'signup'
       ? 'Sem cartão. Você cola o link na bio ainda hoje.'
@@ -75,7 +100,9 @@ export default function Auth({ mode }) {
         ? 'Digite seu e-mail e enviaremos um link de redefinição.'
         : view === 'recover'
           ? 'Escolha a nova senha do seu painel.'
-          : 'Acesse o painel da sua loja.'
+          : view === 'confirm'
+            ? 'Falta um clique para ativar sua conta.'
+            : 'Acesse o painel da sua loja.'
 
   return (
     <>
@@ -84,11 +111,22 @@ export default function Auth({ mode }) {
         <div className="card pad stack">
           <h2>{title}</h2>
           <p>{subtitle}</p>
-          {isSupabase ? (
-            <p className="help">Para gravar a loja, a conta precisa estar logada. Se o cadastro pedir e-mail, confirme e entre.</p>
+          {view !== 'confirm' &&
+            (isSupabase ? (
+              <p className="help">Para gravar a loja, a conta precisa estar logada. Se o cadastro pedir e-mail, confirme e entre.</p>
+            ) : (
+              <p className="help">Modo local: os dados ficam neste navegador até você conectar o Supabase.</p>
+            ))}
+          {view === 'confirm' ? (
+            <div className="stack">
+              {ok && <div className="ok">{ok}</div>}
+              {error && <div className="error">{error}</div>}
+              <button className="btn btn-dark" type="button" disabled={busy} onClick={resend}>
+                {busy ? 'Aguarde...' : 'Reenviar e-mail'}
+              </button>
+              <Link className="btn btn-ghost" to="/entrar">Já confirmei, quero entrar</Link>
+            </div>
           ) : (
-            <p className="help">Modo local: os dados ficam neste navegador até você conectar o Supabase.</p>
-          )}
           <form className="form" onSubmit={onSubmit}>
             {view === 'signup' && (
               <>
@@ -164,8 +202,9 @@ export default function Auth({ mode }) {
               {busy ? 'Aguarde...' : view === 'signup' ? 'Criar conta' : view === 'forgot' ? 'Enviar link' : view === 'recover' ? 'Salvar nova senha' : 'Entrar'}
             </button>
           </form>
+          )}
           <p className="tiny">
-            {view === 'signup' ? (
+            {view === 'confirm' ? null : view === 'signup' ? (
               <Link to="/entrar">Já tem conta? Entrar</Link>
             ) : view === 'forgot' ? (
               <a href="#" onClick={(e) => { e.preventDefault(); setView('login') }}>Voltar para o login</a>

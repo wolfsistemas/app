@@ -145,6 +145,7 @@ export function AuthProvider({ children }) {
             email,
             password,
             options: {
+              emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}entrar`,
               data: {
                 name,
                 terms_accepted_at: terms?.at || null,
@@ -154,17 +155,17 @@ export function AuthProvider({ children }) {
           })
           if (error) throw error
           if (!data.session) {
-            throw new Error('Conta criada. Confirme o e-mail (ou desligue Confirm email no Supabase) e entre de novo.')
+            return { pending: true, email }
           }
           await loadSupabase(data.session.user)
-          return data.session.user
+          return { user: data.session.user }
         }
         const existing = localDb.get().users.find((u) => u.email === email)
         if (existing) throw new Error('Esse e-mail já está cadastrado.')
         const next = { id: uid('user'), email, password, name, terms_accepted_at: terms?.at || null, terms_version: terms?.version || null }
         localDb.upsertUser(next)
         await loadLocal(next)
-        return next
+        return { user: next }
       },
       async signIn({ email, password }) {
         if (isSupabase) {

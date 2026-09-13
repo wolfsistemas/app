@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Seu link de acesso</title>
+  </head>
+  <body style="margin:0;background:#f4efe6;font-family:Arial,Helvetica,sans-serif;color:#14221b;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4efe6;padding:24px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#fffdf8;border:1px solid #d7e3d8;border-radius:16px;overflow:hidden;">
+            <tr>
+              <td style="background:#0b3d2c;padding:18px 24px;color:#ffffff;font-size:20px;font-weight:bold;">VitrineZap</td>
+            </tr>
+            <tr>
+              <td style="padding:24px;">
+                <h1 style="margin:0 0 12px;font-size:20px;color:#14221b;">Entrar no VitrineZap</h1>
+                <p style="margin:0 0 16px;color:#5d6d64;line-height:1.6;">Use o botão abaixo para entrar na sua conta sem digitar senha:</p>
+                <p style="margin:0 0 20px;">
+                  <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#0b3d2c;color:#ffffff;text-decoration:none;font-weight:bold;padding:13px 22px;border-radius:999px;">Entrar na minha conta</a>
+                </p>
+                <p style="margin:0 0 8px;color:#5d6d64;font-size:13px;line-height:1.6;">Se o botão não funcionar, copie e cole este link no navegador:</p>
+                <p style="margin:0 0 20px;word-break:break-all;font-size:13px;">
+                  <a href="{{ .ConfirmationURL }}" style="color:#166246;">{{ .ConfirmationURL }}</a>
+                </p>
+                <p style="margin:0;color:#98a59c;font-size:12px;line-height:1.6;">Se você não pediu este link, ignore este e-mail.</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 24px;background:#f7f1e6;color:#98a59c;font-size:12px;">VitrineZap — catálogo e pedidos no WhatsApp</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
