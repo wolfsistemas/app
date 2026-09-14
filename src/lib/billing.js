@@ -1,14 +1,16 @@
 import { PLAN_DURATION_DAYS, PLAN_PRICE, PLAN_PRICE_CENTS } from './format'
+import { api, apiUrl } from './api'
 
-export const billingUrl = import.meta.env.VITE_BILLING_URL || ''
+// Mantido por compatibilidade com o painel (antes apontava para o GAS).
+export const billingUrl = apiUrl
 
 let mpAvailablePromise = null
-// Consulta o doGet do GAS (GET) para saber se o provedor é o Mercado Pago,
-// pois a assinatura recorrente (hospedada com plano) só existe com provider=mp.
+// Consulta a API (GET) para saber se o provedor é o Mercado Pago, pois a
+// assinatura recorrente (hospedada com plano) só existe com provider=mp.
 export function mpBillingAvailable() {
-  if (!billingUrl) return Promise.resolve(false)
+  if (!apiUrl) return Promise.resolve(false)
   if (!mpAvailablePromise) {
-    mpAvailablePromise = fetch(billingUrl)
+    mpAvailablePromise = fetch(apiUrl)
       .then((res) => res.json().catch(() => ({})))
       .then((d) => d && String(d.provider || '').toLowerCase() === 'mp')
       .catch(() => false)
@@ -16,24 +18,10 @@ export function mpBillingAvailable() {
   return mpAvailablePromise
 }
 
-async function postBilling(payload) {
-  if (!billingUrl) throw new Error('Pagamento ainda não configurado neste ambiente.')
-  const res = await fetch(billingUrl, {
-    method: 'POST',
-    body: JSON.stringify(payload)
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok || data.ok === false) {
-    throw new Error(data.message || data.error || 'Falha na comunicação com o servidor de pagamento.')
-  }
-  return data
-}
-
-// Cria o checkout avulso (1x) no servidor (GAS/Edge). O valor é fixado lá (R$ 9,90/30 dias).
+// Cria o checkout avulso (1x). O valor é fixado no servidor (R$ 9,90/30 dias).
 export async function createCheckout({ storeId, email, name }) {
   const redirectUrl = `${window.location.origin}${import.meta.env.BASE_URL}painel?plano=ok`
-  const data = await postBilling({
-    action: 'checkout',
+  const data = await api('checkout', {
     store_id: storeId,
     email: email || '',
     name: name || '',
@@ -44,35 +32,22 @@ export async function createCheckout({ storeId, email, name }) {
 }
 
 // Assinatura mensal recorrente (Mercado Pago, modelo HOSPEDADO com plano).
-// O GAS cria/pega o "preapproval_plan" da loja e devolve a url do init_point —
-// a 1ª cobrança acontece na página do Mercado Pago (sem tokenizar cartão aqui).
 export async function createSubscription({ storeId }) {
   const redirectUrl = `${window.location.origin}${import.meta.env.BASE_URL}painel?plano=ok`
-  const data = await postBilling({
-    action: 'subscribe',
-    store_id: storeId,
-    redirect_url: redirectUrl
-  })
+  const data = await api('subscribe', { store_id: storeId, redirect_url: redirectUrl })
   if (!data.url) throw new Error(data.message || 'Não foi possível gerar o link de assinatura.')
   return data.url
 }
 
 // Cancela a assinatura recorrente. O plano segue válido até a data já paga.
 export async function cancelSubscription({ storeId }) {
-  return postBilling({
-    action: 'cancel_subscription',
-    store_id: storeId
-  })
+  return api('cancel_subscription', { store_id: storeId })
 }
 
-// Rede de segurança: ao voltar do checkout MP (?plano=ok), consulta o GAS, que
-// busca a assinatura autorizada na API do MP e ativa a loja — sem depender do
-// webhook (que pode atrasar ou não chegar no sandbox).
+// Rede de segurança: ao voltar do checkout MP (?plano=ok), busca a assinatura
+// autorizada no MP e ativa a loja — sem depender do webhook.
 export async function syncSubscription({ storeId }) {
-  return postBilling({
-    action: 'sync_subscription',
-    store_id: storeId
-  })
+  return api('sync_subscription', { store_id: storeId })
 }
 
 export const INFINITEPAY_DEFAULTS = {

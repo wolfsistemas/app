@@ -3,6 +3,7 @@ const JPEG_QUALITY = 0.82
 const FOTOS_BUCKET = 'fotos'
 
 import { isSupabase, supabase } from './supabase.js'
+import { apiUrl } from './api.js'
 
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
@@ -55,11 +56,19 @@ export function compressImage(file) {
   })
 }
 
-async function uploadViaEndpoint(image, name) {
-  const token = import.meta.env.VITE_UPLOAD_TOKEN || ''
-  const res = await fetch(import.meta.env.VITE_UPLOAD_URL, {
+async function uploadViaEndpoint(endpoint, image, name) {
+  let jwt = ''
+  if (isSupabase) {
+    const { data } = await supabase.auth.getSession()
+    jwt = data?.session?.access_token || ''
+  }
+  const res = await fetch(endpoint, {
     method: 'POST',
-    body: JSON.stringify(token ? { image, name, token } : { image, name })
+    headers: {
+      'Content-Type': 'application/json',
+      ...(jwt ? { Authorization: 'Bearer ' + jwt } : {})
+    },
+    body: JSON.stringify({ action: 'upload', image, name })
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok || !data.url) {
@@ -92,12 +101,11 @@ export async function uploadPhoto(file) {
   const blob = await compressImage(file)
   const name = (file.name || 'produto').replace(/\.[^.]+$/, '').slice(0, 80)
 
-  const endpoint =
-    import.meta.env.VITE_UPLOAD_URL || (import.meta.env.DEV ? '/api/upload' : '')
+  const endpoint = apiUrl || (import.meta.env.DEV ? '/api/upload' : '')
 
   if (endpoint) {
     const image = await blobToBase64(blob)
-    return uploadViaEndpoint(image, name)
+    return uploadViaEndpoint(endpoint, image, name)
   }
 
   return uploadViaSupabaseStorage(blob, file)

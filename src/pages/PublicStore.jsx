@@ -167,7 +167,12 @@ export default function PublicStore() {
             total,
             at: Date.now()
           })
-          await createPix({ storeId: store.id, orderId: created.id, payerEmail: customer.email || '' })
+          await createPix({
+            storeId: store.id,
+            orderId: created.id,
+            publicToken: created.public_token,
+            payerEmail: customer.email || ''
+          })
           setCheckout(false)
           setCart([])
           setCustomer({ name: '', phone: '', email: '', note: '' })
@@ -183,7 +188,7 @@ export default function PublicStore() {
 
     // Avisa o cliente por e-mail (link do pedido), quando informado.
     if (isSupabase && created?.id && customer.email) {
-      notifyOrder({ storeId: store.id, orderId: created.id }).catch(() => {})
+      notifyOrder({ storeId: store.id, orderId: created.id, publicToken: created.public_token }).catch(() => {})
     }
 
     const text = buildOrderMessage({

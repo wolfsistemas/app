@@ -108,7 +108,7 @@ export default function Order() {
   async function regeneratePix() {
     setPixBusy(true)
     try {
-      await createPix({ storeId: order.store_id, orderId: order.id, renew: true })
+      await createPix({ storeId: order.store_id, orderId: order.id, publicToken: token, renew: true })
       const row = await getOrderPublic(token)
       if (row) setOrder(row)
       showToast('Novo Pix gerado', 'ok')
