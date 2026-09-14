@@ -19,7 +19,7 @@ import {
   resolveStoreForMp,
   isNotFound
 } from '../_shared/mp.ts'
-import { notify, sendEmail, orderPublicLink } from '../_shared/email.ts'
+import { notify, sendEmail, orderPublicLink, sendOrderKindEmail } from '../_shared/email.ts'
 import { sendPush } from '../_shared/misc.ts'
 
 const MP_ORDER_STATUS: Record<string, string> = {
@@ -33,7 +33,7 @@ const MP_ORDER_STATUS: Record<string, string> = {
   charged_back: 'refunded'
 }
 
-async function updateOrderPayment(orderId: string, payment: any): Promise<void> {
+async function updateOrderPayment(orderId: string, payment: any): Promise<string> {
   const st = MP_ORDER_STATUS[String(payment.status || '')] || 'pending'
   const fields: Record<string, unknown> = { payment_status: st }
   if (st === 'paid') fields.paid_at = new Date().toISOString()
@@ -42,6 +42,7 @@ async function updateOrderPayment(orderId: string, payment: any): Promise<void> 
     prefer: 'return=minimal',
     payload: fields
   })
+  return st
 }
 
 async function notifyOrderPaid(order: any, payment: any): Promise<void> {
@@ -104,7 +105,12 @@ async function handleMpOrderPayment(paymentId: string, payment: any): Promise<an
     await notify('Webhook MP pago sem pedido', `payment=${paymentId} order=${orderId}`)
     return { success: true, message: null, status: 'no-order' }
   }
-  await updateOrderPayment(orderId, payment)
+  const st = await updateOrderPayment(orderId, payment)
+  if (st === 'paid') {
+    order.payment_status = 'paid'
+    const store = await fetchStoreOwner(order.store_id)
+    await sendOrderKindEmail(order, store && store.name, 'paid')
+  }
   await notifyOrderPaid(order, payment)
   await markProcessed('order-pay:' + paymentId)
   return { success: true, message: null }

@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { createPix, getOrderPublic } from '../lib/payments.js'
+import { createPix, getOrderPublic, notifyOrder } from '../lib/payments.js'
 import { isSupabase, supabase } from '../lib/supabase.js'
 import { money, onlyDigits } from '../lib/format.js'
+import { formatAddress } from '../lib/delivery.js'
 import Brand from '../components/Brand.jsx'
 import { useToast } from '../components/Toast.jsx'
 
@@ -33,7 +34,9 @@ export default function Order() {
   const [missing, setMissing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pixBusy, setPixBusy] = useState(false)
+  const [policy, setPolicy] = useState('')
   const storeLoaded = useRef(false)
+  const expiredNotified = useRef(false)
 
   useEffect(() => {
     let alive = true
@@ -55,15 +58,22 @@ export default function Order() {
           storeLoaded.current = true
           supabase
             .from('stores')
-            .select('name, whatsapp')
+            .select('*')
             .eq('id', row.store_id)
             .maybeSingle()
             .then(({ data }) => {
               if (alive && data) {
                 setStoreName(data.name || '')
                 setStorePhone(data.whatsapp || '')
+                setPolicy(data.return_policy || '')
               }
             })
+        }
+
+        // Avisa o cliente uma vez que o Pix venceu (retomada do carrinho).
+        if (row.payment_status === 'pending' && isExpired(row) && !expiredNotified.current) {
+          expiredNotified.current = true
+          notifyOrder({ storeId: row.store_id, orderId: row.id, publicToken: token, kind: 'expired' }).catch(() => {})
         }
 
         const waitingPix = row.payment_status === 'pending' && Boolean(row.payment_code) && !isExpired(row)
@@ -167,10 +177,39 @@ export default function Order() {
                 <span>{money(Number(i.price || 0) * (i.qty || 1))}</span>
               </div>
             ))}
-            <div className="between" style={{ borderTop: '1px solid var(--line, #e5e0d5)', paddingTop: 8 }}>
-              <strong>Total</strong>
-              <strong>{money(order.total)}</strong>
+            <div className="stack" style={{ gap: 2, borderTop: '1px solid var(--line, #e5e0d5)', paddingTop: 8 }}>
+              <div className="between">
+                <span className="muted">Subtotal</span>
+                <span className="muted">{money(order.subtotal || order.total)}</span>
+              </div>
+              {order.delivery_type === 'retirada' ? (
+                <div className="between">
+                  <span className="muted">Retirada na loja</span>
+                  <span className="muted">Grátis</span>
+                </div>
+              ) : (
+                <div className="between">
+                  <span className="muted">Entrega{order.delivery_zone ? ` (${order.delivery_zone})` : ''}</span>
+                  <span className="muted">{Number(order.delivery_fee || 0) > 0 ? money(order.delivery_fee) : 'Grátis'}</span>
+                </div>
+              )}
+              <div className="between">
+                <strong>Total</strong>
+                <strong>{money(order.total)}</strong>
+              </div>
             </div>
+          </div>
+
+          <div className="stack" style={{ gap: 2 }}>
+            {order.delivery_type === 'retirada' ? (
+              <p className="help" style={{ margin: 0 }}>Retirada combinada direto com a loja.</p>
+            ) : (
+              formatAddress(order.address) && (
+                <p className="help" style={{ margin: 0 }}>
+                  <strong>Entrega:</strong> {formatAddress(order.address)}
+                </p>
+              )
+            )}
           </div>
 
           {order.payment_status === 'paid' && order.status !== 'cancelado' && (
@@ -238,6 +277,13 @@ export default function Order() {
             >
               Falar com a loja
             </a>
+          )}
+
+          {policy && (
+            <details className="stack" style={{ marginTop: 4 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Política de trocas e devoluções</summary>
+              <p className="help" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{policy}</p>
+            </details>
           )}
         </section>
       </main>

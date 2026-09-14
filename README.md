@@ -28,6 +28,8 @@ Sem VPS. O browser fala direto com o Supabase; o que precisa de segredo (tokens,
 - Marca VitrineZap no rodapé do plano free (removida no Loja)
 - Checkout avulso via link (InfinitePay / Mercado Pago) + **assinatura mensal recorrente (Mercado Pago hospedado com plano, cancele quando quiser)**
 - **Pix com confirmação automática** no Plano Loja: o lojista conecta a conta do Mercado Pago e o dinheiro cai direto nele (sem custódia)
+- **Entrega por região/CEP** (ViaCEP), retirada na loja, frete grátis, pedido mínimo e política de trocas
+- **E-mails HTML** (Resend) de pedido, pagamento, envio e retomada + selos de confiança na vitrine
 
 ## Como rodar
 
@@ -42,7 +44,7 @@ Sem `.env`, o app usa **modo local** (dados no navegador + loja demo).
 
 1. Crie um projeto no Supabase.
 2. No SQL Editor, rode nesta ordem: `supabase/schema.sql`, `supabase/rls.sql`, `supabase/storage.sql`.
-3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`. Para o Pix na conta do vendedor (OAuth), rode `supabase/up_seller_payments.sql`. Para o e-mail de retomada do cliente, rode `supabase/up_order_notify.sql`. Para a idempotência dos webhooks, rode `supabase/up_edge_api.sql`.
+3. Se já existiam tabelas, rode também a migração `supabase/up_orders_v2.sql` (código do pedido, telefone do cliente, expiração de plano e realtime). Para assinatura recorrente (Mercado Pago), rode também `supabase/up_subscriptions.sql` e `supabase/up_mp_plans.sql`. Para o Pix na conta do vendedor (OAuth), rode `supabase/up_seller_payments.sql`. Para o e-mail de retomada do cliente, rode `supabase/up_order_notify.sql`. Para a entrega por região/CEP e as políticas da loja, rode `supabase/up_delivery.sql`. Para a idempotência dos webhooks, rode `supabase/up_edge_api.sql`.
 4. Em Authentication > Providers, deixe e-mail/senha ligado. Ligue **Confirm email** e cole os templates em PT-BR de `supabase/email-templates/` (veja o README da pasta). Em dev, se quiser testar rápido, pode desligar o Confirm email.
 5. Em Authentication > URL configuration: Site URL e Redirect URLs apontando para o endereço do app (`https://wolfsistemas.github.io/app/**`).
 6. Copie `.env.example` para `.env` e preencha URL + anon key. Em produção, preencha também `VITE_API_URL` em `.env.production`.
@@ -90,6 +92,37 @@ O upload nunca expõe a chave no front:
 3. **Sem `VITE_API_URL`**: o usuário logado envia para o bucket público **`fotos`** do Supabase Storage (fallback).
 
 Álbum: a API do ImgBB **não coloca a foto num álbum**. Dá para organizar depois no site (ibb.co), mas não no upload.
+
+## Entrega, frete e retirada
+
+Cada loja configura a entrega no painel (aba **Vitrine**, seção "Entrega e retirada"):
+
+- **Faço entrega** (`delivery_enabled`), **Prazo** (`delivery_time`)
+- **Frete grátis acima de** (`free_delivery_above`) e **Pedido mínimo** (`min_order`)
+- **Retirada na loja** (`pickup_enabled`, `pickup_address`)
+- **Regiões por faixa de CEP** (`delivery_zones`): `[{ "name": "Centro", "fee": 8.5, "cep_start": "01000000", "cep_end": "01999999" }]`
+- **Política de trocas** (`return_policy`), mostrada na página do pedido
+
+No checkout, o cliente escolhe **Entrega** ou **Retirada**, informa o CEP (autopreenchido pelo **ViaCEP**) e o frete aparece na hora.
+
+O frete **é recalculado no servidor** pela função `calc_delivery_fee()` dentro da RPC `create_order` — o front só exibe uma prévia com a mesma regra (não dá para burlar o valor). Regras:
+
+- Sem zonas cadastradas: frete **combinado no WhatsApp** (não bloqueia o pedido).
+- Com zonas: se o CEP não bate em nenhuma faixa, o pedido é recusado (`delivery_not_available`).
+- Frete grátis e pedido mínimo são validados no banco.
+
+Rode a migração `supabase/up_delivery.sql` (adiciona as colunas, a função de frete e atualiza `create_order`/`get_order_public`).
+
+## E-mails transacionais (Resend)
+
+Os e-mails são enviados pela Edge Function (templates HTML em `supabase/functions/api/_shared/email.ts`):
+
+- **Pedido recebido** (`created`, uma vez) e **Pix pendente/retomada**
+- **Pagamento confirmado** (`paid`) — disparado pelo webhook
+- **Pedido enviado** (`shipped`) — quando o lojista marca "Enviado"
+- **Pix expirado** (`expired`) — retomada de carrinho na página do pedido
+
+O lojista também recebe aviso de pedido pago (e-mail + push). Configure `RESEND_API_KEY` e `EMAIL_FROM`.
 
 ## Assinatura (Plano Loja)
 
@@ -287,7 +320,7 @@ O site publica em `https://wolfsistemas.github.io/app/` a cada push na `main`.
 
 ```text
 src/pages        landing, auth, painel, vitrine pública
-src/lib          supabase, api, billing, payments, upload, whatsapp, auth
+src/lib          supabase, api, billing, payments, delivery, upload, whatsapp, auth
 src/components   foto, analytics
 supabase/        schema SQL + RLS + migrações
 supabase/functions/api         backend único (router: cobrança, Pix, webhooks, upload, conta)

@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { localDb } from '../lib/local.js'
 import { isSupabase, supabase } from '../lib/supabase.js'
-import { isProStore, money, uid } from '../lib/format.js'
+import { isProStore, money, onlyDigits, uid } from '../lib/format.js'
 import { buildOrderMessage, whatsappUrl } from '../lib/whatsapp.js'
+import { calcDeliveryFee, emptyAddress, lookupCep } from '../lib/delivery.js'
 import { createPix, notifyOrder } from '../lib/payments.js'
 import { recentOrders, rememberOrder } from '../lib/recentOrders.js'
 import Brand from '../components/Brand.jsx'
@@ -34,6 +35,10 @@ export default function PublicStore() {
   const [customer, setCustomer] = useState({ name: '', phone: '', email: '', note: '' })
   const [missing, setMissing] = useState(false)
   const [sending, setSending] = useState(false)
+  const [deliveryType, setDeliveryType] = useState('entrega')
+  const [address, setAddress] = useState(emptyAddress())
+  const [cepBusy, setCepBusy] = useState(false)
+  const [cepMsg, setCepMsg] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -90,6 +95,31 @@ export default function PublicStore() {
     )
   }
 
+  async function handleCep(value) {
+    const digits = onlyDigits(value).slice(0, 8)
+    setAddress((a) => ({ ...a, cep: digits }))
+    setCepMsg('')
+    if (digits.length !== 8) return
+    setCepBusy(true)
+    const found = await lookupCep(digits)
+    setCepBusy(false)
+    if (!found) {
+      setCepMsg('CEP não encontrado. Confira os 8 dígitos.')
+      return
+    }
+    setAddress((a) => ({ ...a, ...found }))
+    setCepMsg('')
+  }
+
+  function resetCheckout() {
+    setCheckout(false)
+    setCart([])
+    setCustomer({ name: '', phone: '', email: '', note: '' })
+    setAddress(emptyAddress())
+    setDeliveryType('entrega')
+    setCepMsg('')
+  }
+
   useEffect(() => {
     document.title = store
       ? `${store.name} · peça pelo WhatsApp`
@@ -112,7 +142,35 @@ export default function PublicStore() {
 
   async function sendOrder() {
     if (!customer.name || sending) return
+
+    const minOrder = Number(store.min_order || 0)
+    if (minOrder > 0 && total < minOrder) {
+      showToast(`Pedido mínimo de ${money(minOrder)} para esta loja.`, 'info', 7000)
+      return
+    }
+
+    const isPickup = deliveryType === 'retirada'
+    const dinfo = isPickup
+      ? { fee: 0, zone: 'Retirada na loja', covered: true }
+      : calcDeliveryFee(store, address.cep, total)
+    if (!isPickup) {
+      if (onlyDigits(address.cep).length !== 8) {
+        showToast('Informe um CEP válido para calcular a entrega.', 'info', 7000)
+        return
+      }
+      if (!address.street || !address.number) {
+        showToast('Complete o endereço (rua e número).', 'info', 7000)
+        return
+      }
+      if (!dinfo.covered) {
+        showToast('Não entregamos no CEP informado. Fale com a loja ou escolha retirada.', 'info', 9000)
+        return
+      }
+    }
+
     setSending(true)
+    const orderTotal = total + Number(dinfo.fee || 0)
+    const orderAddress = isPickup ? {} : { ...address }
     let orderCode = ''
     let created = null
     const order = {
@@ -122,7 +180,12 @@ export default function PublicStore() {
       customer_email: customer.email || '',
       items: cart.map(({ name, qty, price }) => ({ name, qty, price })),
       note: customer.note,
-      total,
+      subtotal: total,
+      delivery_fee: Number(dinfo.fee || 0),
+      delivery_type: isPickup ? 'retirada' : 'entrega',
+      address: orderAddress,
+      delivery_zone: dinfo.zone || '',
+      total: orderTotal,
       status: 'novo',
       created_at: new Date().toISOString()
     }
@@ -136,10 +199,30 @@ export default function PublicStore() {
           p_note: order.note,
           p_total: order.total
         }
-        let res = await supabase.rpc('create_order', { ...baseArgs, p_customer_email: order.customer_email })
-        if (res.error) {
-          // Banco sem up_order_notify.sql: tenta sem o e-mail.
+        const fullArgs = {
+          ...baseArgs,
+          p_customer_email: order.customer_email,
+          p_delivery_type: order.delivery_type,
+          p_address: order.address,
+          p_cep: address.cep || ''
+        }
+        let res = await supabase.rpc('create_order', fullArgs)
+        if (res.error && isMissingFunction(res.error)) {
+          // Banco sem up_delivery.sql/up_order_notify.sql: assinatura antiga.
           res = await supabase.rpc('create_order', baseArgs)
+        }
+        if (res.error) {
+          const msg = String(res.error.message || '')
+          if (msg.includes('delivery_not_available')) {
+            showToast('Não entregamos no CEP informado. Fale com a loja ou escolha retirada.', 'info', 9000)
+            setSending(false)
+            return
+          }
+          if (msg.includes('min_order_not_met')) {
+            showToast(`Pedido mínimo de ${money(store.min_order)} para esta loja.`, 'info', 9000)
+            setSending(false)
+            return
+          }
         }
         created = res.data || null
         orderCode = res.data?.code ? String(res.data.code) : ''
@@ -164,7 +247,7 @@ export default function PublicStore() {
             token: created.public_token,
             slug: store.slug,
             code: created.code || '',
-            total,
+            total: orderTotal,
             at: Date.now()
           })
           await createPix({
@@ -173,9 +256,7 @@ export default function PublicStore() {
             publicToken: created.public_token,
             payerEmail: customer.email || ''
           })
-          setCheckout(false)
-          setCart([])
-          setCustomer({ name: '', phone: '', email: '', note: '' })
+          resetCheckout()
           setSending(false)
           navigate(`/pedido/${created.public_token}`)
           return
@@ -198,7 +279,11 @@ export default function PublicStore() {
       customerPhone: customer.phone,
       note: customer.note,
       pixKey: isProStore(store) ? store.pix_key : '',
-      code: orderCode
+      code: orderCode,
+      deliveryType: order.delivery_type,
+      deliveryFee: order.delivery_fee,
+      deliveryZone: order.delivery_zone,
+      address: order.address
     })
     const url = whatsappUrl(store.whatsapp, text)
     const win = window.open('', '_blank')
@@ -208,10 +293,13 @@ export default function PublicStore() {
     } else {
       window.location.href = url
     }
-    setCheckout(false)
-    setCart([])
-    setCustomer({ name: '', phone: '', email: '', note: '' })
+    resetCheckout()
     setSending(false)
+  }
+
+  function isMissingFunction(error) {
+    const msg = String(error?.message || '')
+    return /PGRST202|Could not find the function|does not exist|schema cache/i.test(msg)
   }
 
   async function copyPix() {
@@ -253,6 +341,27 @@ export default function PublicStore() {
 
   const isFree = !isProStore(store)
 
+  const pickupEnabled = store.pickup_enabled !== false
+  const minOrder = Number(store.min_order || 0)
+  const belowMin = minOrder > 0 && total < minOrder
+  const dinfo = deliveryType === 'retirada'
+    ? { fee: 0, zone: 'Retirada na loja', covered: true, freeDelivery: false }
+    : calcDeliveryFee(store, address.cep, total)
+  const orderTotal = total + Number(dinfo.fee || 0)
+  const freeAbove = Number(store.free_delivery_above || 0)
+  const policies = []
+  if (store.delivery_time) policies.push(`Entrega em ${store.delivery_time}`)
+  if (freeAbove > 0) policies.push(`Frete grátis acima de ${money(freeAbove)}`)
+  if (minOrder > 0) policies.push(`Pedido mínimo ${money(minOrder)}`)
+  if (pickupEnabled) policies.push(store.pickup_address ? `Retirada: ${store.pickup_address}` : 'Retirada na loja')
+  if (Array.isArray(store.delivery_zones) && store.delivery_zones.length > 0) {
+    policies.push(`${store.delivery_zones.length} ${store.delivery_zones.length === 1 ? 'região' : 'regiões'} atendidas`)
+  }
+  const badges = []
+  if (store.mp_connected) badges.push('Pagamento via Pix na hora')
+  badges.push('Acompanhe o pedido por link')
+  if (store.return_policy) badges.push('Política de trocas')
+
   return (
     <div className={`theme-${store.theme || 'bosque'}`}>
       {isFree && (
@@ -290,10 +399,27 @@ export default function PublicStore() {
               <button className="btn btn-gold" onClick={copyPix}>PIX {store.pix_key}</button>
             )}
           </div>
+          {badges.length > 0 && (
+            <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+              {badges.map((b) => (
+                <span key={b} className="chip" style={{ background: 'rgba(255,255,255,.16)', color: '#fff', borderColor: 'transparent' }}>{b}</span>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
       <main className="wrap" style={{ padding: '18px 0 90px' }}>
+        {policies.length > 0 && (
+          <section className="card pad stack" style={{ marginBottom: 14 }}>
+            <strong>Como funciona a entrega</strong>
+            <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+              {policies.map((p) => (
+                <span key={p} className="chip">{p}</span>
+              ))}
+            </div>
+          </section>
+        )}
         <div className="row" style={{ overflowX: 'auto', paddingBottom: 8 }}>
           {cats.map((c) => (
             <button key={c} className={`btn ${category === c ? 'btn-theme' : 'btn-ghost'}`} onClick={() => setCategory(c)}>
@@ -359,17 +485,69 @@ export default function PublicStore() {
                 </div>
               </div>
             ))}
-            <strong>Total {money(total)}</strong>
+            <div className="stack" style={{ gap: 4 }}>
+              <div className="between"><span>Subtotal</span><span>{money(total)}</span></div>
+              {deliveryType === 'retirada' ? (
+                <div className="between"><span>Retirada na loja</span><span>Grátis</span></div>
+              ) : (
+                <div className="between">
+                  <span>Entrega{dinfo.zone ? ` (${dinfo.zone})` : ''}</span>
+                  <span>{dinfo.fee > 0 ? money(dinfo.fee) : dinfo.covered ? 'Grátis' : '—'}</span>
+                </div>
+              )}
+              <div className="between"><strong>Total</strong><strong>{money(orderTotal)}</strong></div>
+            </div>
             <input placeholder="Seu nome" required value={customer.name} onChange={(e) => setCustomer({ ...customer, name: e.target.value })} />
             <input placeholder="Seu WhatsApp (opcional)" value={customer.phone} onChange={(e) => setCustomer({ ...customer, phone: e.target.value })} />
             <input type="email" placeholder="Seu e-mail (opcional, para acompanhar)" value={customer.email} onChange={(e) => setCustomer({ ...customer, email: e.target.value })} />
-            <textarea placeholder="Observação (tamanho, entrega...)" value={customer.note} onChange={(e) => setCustomer({ ...customer, note: e.target.value })} />
+
+            {pickupEnabled && (
+              <div className="row" style={{ gap: 8 }}>
+                <button type="button" className={`btn ${deliveryType === 'entrega' ? 'btn-dark' : 'btn-ghost'}`} onClick={() => setDeliveryType('entrega')}>Entrega</button>
+                <button type="button" className={`btn ${deliveryType === 'retirada' ? 'btn-dark' : 'btn-ghost'}`} onClick={() => setDeliveryType('retirada')}>Retirar na loja</button>
+              </div>
+            )}
+
+            {deliveryType === 'retirada' ? (
+              <p className="help">Combine a retirada com a loja pelo WhatsApp{store.pickup_address ? ` — ${store.pickup_address}` : ''}.</p>
+            ) : (
+              <div className="stack" style={{ gap: 6 }}>
+                <input inputMode="numeric" placeholder="CEP (só números)" value={address.cep} onChange={(e) => handleCep(e.target.value)} />
+                {cepBusy && <p className="help">Buscando CEP...</p>}
+                {cepMsg && <p className="help">{cepMsg}</p>}
+                {!cepBusy && !cepMsg && onlyDigits(address.cep).length === 8 && !dinfo.covered && (
+                  <p className="help" style={{ color: '#b3261e' }}>Não entregamos nesse CEP. Fale com a loja ou escolha retirada.</p>
+                )}
+                <div className="row" style={{ gap: 8 }}>
+                  <input style={{ flex: 3 }} placeholder="Rua" value={address.street} onChange={(e) => setAddress({ ...address, street: e.target.value })} />
+                  <input style={{ flex: 1 }} placeholder="Nº" value={address.number} onChange={(e) => setAddress({ ...address, number: e.target.value })} />
+                </div>
+                <input placeholder="Complemento (opcional)" value={address.complement} onChange={(e) => setAddress({ ...address, complement: e.target.value })} />
+                <input placeholder="Bairro" value={address.district} onChange={(e) => setAddress({ ...address, district: e.target.value })} />
+                <div className="row" style={{ gap: 8 }}>
+                  <input style={{ flex: 3 }} placeholder="Cidade" value={address.city} onChange={(e) => setAddress({ ...address, city: e.target.value })} />
+                  <input style={{ flex: 1 }} placeholder="UF" value={address.state} onChange={(e) => setAddress({ ...address, state: e.target.value.toUpperCase().slice(0, 2) })} />
+                </div>
+              </div>
+            )}
+
+            <textarea placeholder="Observação (opcional)" value={customer.note} onChange={(e) => setCustomer({ ...customer, note: e.target.value })} />
+
+            {belowMin && (
+              <p className="help" style={{ color: '#b3261e' }}>
+                Pedido mínimo de {money(minOrder)}. Faltam {money(minOrder - total)}.
+              </p>
+            )}
+            {!belowMin && freeAbove > 0 && total < freeAbove && deliveryType === 'entrega' && (
+              <p className="help">Frete grátis acima de {money(freeAbove)}.</p>
+            )}
+
             {store.mp_connected ? (
               <p className="help">Você vai pagar com Pix e o pedido é confirmado automaticamente.</p>
             ) : (
               isProStore(store) && store.pix_key && <p className="help">A chave PIX vai junto no texto do WhatsApp.</p>
             )}
-            <button className="btn btn-whats" disabled={!customer.name || sending} onClick={sendOrder}>
+            <button className="btn btn-whats" disabled={!customer.name || sending || belowMin} onClick={sendOrder}>
               {sending ? 'Enviando...' : store.mp_connected ? 'Gerar Pix e confirmar' : 'Enviar no WhatsApp'}
             </button>
           </div>

@@ -43,9 +43,15 @@ export async function refundPayment({ storeId, orderId }) {
   return api('refund_payment', { store_id: storeId, order_id: orderId, access_token })
 }
 
-// Avisa o cliente por e-mail com o link do pedido (envia só uma vez).
-export async function notifyOrder({ storeId, orderId, publicToken }) {
-  return api('order_notify', { store_id: storeId, order_id: orderId, public_token: publicToken || '' })
+// Avisa o cliente por e-mail com o link do pedido.
+// kind: 'created' | 'paid' | 'shipped' | 'expired'
+export async function notifyOrder({ storeId, orderId, publicToken, kind }) {
+  return api('order_notify', {
+    store_id: storeId,
+    order_id: orderId,
+    public_token: publicToken || '',
+    kind: kind || 'created'
+  })
 }
 
 // Dispara uma notificação push de teste para os aparelhos da loja.

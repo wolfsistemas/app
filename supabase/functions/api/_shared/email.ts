@@ -70,7 +70,8 @@ export function emailLayout(title: string, inner: string): string {
 <h1 style="margin:0 0 12px;font-size:20px;color:#14221b;">${title}</h1>
 ${inner}
 </td></tr>
-<tr><td style="padding:16px 24px;background:#f7f1e6;color:#98a59c;font-size:12px;">VitrineZap — catálogo e pedidos no WhatsApp</td></tr>
+<tr><td style="padding:16px 16px 8px;background:#f7f1e6;color:#98a59c;font-size:12px;">VitrineZap — catálogo e pedidos no WhatsApp</td></tr>
+<tr><td style="padding:0 16px 16px;background:#f7f1e6;color:#98a59c;font-size:11px;line-height:1.6;">Este e-mail é sobre um pedido feito no catálogo da loja. Se você não reconhece, ignore esta mensagem.</td></tr>
 </table></td></tr></table></body></html>`
 }
 
@@ -86,45 +87,122 @@ function itemsTable(order: any): string {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0;border-top:1px solid #e7efe7;border-bottom:1px solid #e7efe7;">${rows}</table>`
 }
 
-// E-mail de confirmacao/retomada do pedido para o cliente.
-export function orderEmail(order: any, storeName: string): { subject: string; html: string; text: string } {
+function summaryTable(order: any): string {
+  const subtotal = Number(order?.subtotal || 0)
+  const fee = Number(order?.delivery_fee || 0)
+  const total = Number(order?.total || 0)
+  const rows: string[] = []
+  if (subtotal > 0) {
+    rows.push(
+      `<tr><td style="padding:2px 0;color:#5d6d64;">Subtotal</td><td style="padding:2px 0;text-align:right;color:#5d6d64;">${formatBrl(subtotal)}</td></tr>`
+    )
+    rows.push(
+      `<tr><td style="padding:2px 0;color:#5d6d64;">Entrega</td><td style="padding:2px 0;text-align:right;color:#5d6d64;">${fee > 0 ? formatBrl(fee) : 'grátis'}</td></tr>`
+    )
+  }
+  rows.push(
+    `<tr><td style="padding:6px 0 0;font-weight:bold;">Total</td><td style="padding:6px 0 0;text-align:right;font-weight:bold;">${formatBrl(total)}</td></tr>`
+  )
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows.join('')}</table>`
+}
+
+function addressLine(order: any): string {
+  const a = order?.address
+  if (!a || typeof a !== 'object') return ''
+  const cep = String(a.cep || '').replace(/\D/g, '')
+  const line1 = [a.street, a.number].filter(Boolean).join(', ')
+  const line2 = [a.complement, a.district].filter(Boolean).join(' - ')
+  const line3 = [a.city, a.state].filter(Boolean).join('/')
+  const cepLabel = cep.length === 8 ? `CEP ${cep.slice(0, 5)}-${cep.slice(5)}` : ''
+  return [line1, line2, line3, cepLabel].filter(Boolean).join(' · ')
+}
+
+function deliveryBlock(order: any): string {
+  if (order?.delivery_type === 'retirada') {
+    return `<p style="margin:0 0 4px;color:#5d6d64;line-height:1.6;"><strong>Retirada na loja</strong>${order.delivery_zone ? '' : ''}</p>`
+  }
+  const addr = addressLine(order)
+  if (!addr) return ''
+  return `<p style="margin:0 0 4px;color:#5d6d64;line-height:1.6;"><strong>Entrega:</strong> ${addr}</p>`
+}
+
+type Kind = 'created' | 'paid' | 'shipped' | 'expired'
+
+const KIND_COPY: Record<Kind, { title: string; intro: string; cta: string }> = {
+  created: {
+    title: 'Pedido recebido',
+    intro: 'Recebemos seu pedido. Acompanhe o andamento pelo link:',
+    cta: 'Acompanhar pedido'
+  },
+  paid: {
+    title: 'Pagamento confirmado',
+    intro: 'Seu pagamento foi confirmado e a loja já foi avisada. Acompanhe o preparo pelo link:',
+    cta: 'Ver meu pedido'
+  },
+  shipped: {
+    title: 'Pedido enviado',
+    intro: 'Seu pedido saiu para entrega. Acompanhe pelo link:',
+    cta: 'Acompanhar entrega'
+  },
+  expired: {
+    title: 'Seu pedido está esperando',
+    intro: 'O prazo do Pix venceu e o pedido ainda não foi pago. Abra o link para gerar um novo Pix e concluir:',
+    cta: 'Concluir meu pedido'
+  }
+}
+
+// E-mail do pedido para o cliente (criado/pago/enviado/expirado).
+export function orderEmail(order: any, storeName: string, kind: Kind = 'created'): { subject: string; html: string; text: string } {
+  const copy = KIND_COPY[kind] || KIND_COPY.created
   const code = order.code ? '#' + order.code : order.id
   const link = orderPublicLink(order)
   const pendingPix = order.payment_status === 'pending' && order.payment_method === 'pix'
-  const subject = `Pedido ${code}${storeName ? ' - ' + storeName : ''}`
-  const intro = pendingPix
-    ? 'Falta concluir o pagamento por Pix. Abra o pedido e pague na hora:'
-    : 'Recebemos seu pedido. Acompanhe o andamento pelo link:'
+  const subject = `${copy.title} - Pedido ${code}${storeName ? ' - ' + storeName : ''}`
+  const intro =
+    kind === 'created' && pendingPix
+      ? 'Falta concluir o pagamento por Pix. Abra o pedido e pague na hora:'
+      : copy.intro
+  const ctaLabel = kind === 'created' && pendingPix ? 'Pagar com Pix' : copy.cta
   const button = link
-    ? `<p style="margin:18px 0;"><a href="${link}" style="display:inline-block;background:#0b3d2c;color:#fff;text-decoration:none;font-weight:bold;padding:13px 22px;border-radius:999px;">${pendingPix ? 'Pagar com Pix' : 'Acompanhar pedido'}</a></p>`
+    ? `<p style="margin:18px 0;"><a href="${link}" style="display:inline-block;background:#0b3d2c;color:#fff;text-decoration:none;font-weight:bold;padding:13px 22px;border-radius:999px;">${ctaLabel}</a></p>`
     : ''
   const inner = `
-    <p style="margin:0 0 12px;color:#5d6d64;line-height:1.6;">Olá${order.customer_name ? ' ' + order.customer_name : ''}! Seu pedido ${code}${storeName ? ' na ' + storeName : ''} foi registrado.</p>
+    <p style="margin:0 0 12px;color:#5d6d64;line-height:1.6;">Olá${order.customer_name ? ' ' + order.customer_name : ''}! Seu pedido ${code}${storeName ? ' na ' + storeName : ''}.</p>
     ${itemsTable(order)}
-    <p style="margin:0 0 12px;font-weight:bold;">Total: ${formatBrl(order.total)}</p>
-    <p style="margin:0 0 4px;color:#5d6d64;line-height:1.6;">${intro}</p>
+    ${summaryTable(order)}
+    ${deliveryBlock(order)}
+    <p style="margin:12px 0 4px;color:#5d6d64;line-height:1.6;">${intro}</p>
     ${button}
     <p style="margin:0;color:#98a59c;font-size:12px;line-height:1.6;">Qualquer dúvida, fale com a loja pelo WhatsApp.</p>`
   const text = `Pedido ${code}${storeName ? ' na ' + storeName : ''}\nTotal: ${formatBrl(order.total)}\n${link ? '\nAcompanhe: ' + link : ''}`
-  return { subject, html: emailLayout(`Pedido ${code}`, inner), text }
+  return { subject, html: emailLayout(`${copy.title} · Pedido ${code}`, inner), text }
 }
 
-// Avisa o cliente (uma vez). Marca customer_notified_at ao enviar.
-export async function sendCustomerOrderEmail(order: any, storeName: string): Promise<boolean> {
+// Envia o e-mail do pedido ao cliente.
+// - kind 'created': envia só uma vez (marca customer_notified_at).
+// - outros: o chamador garante o envio único.
+export async function sendOrderKindEmail(order: any, storeName: string, kind: Kind = 'created'): Promise<boolean> {
   const to = String(order?.customer_email || '').trim()
   if (!isEmail(to)) return false
-  if (order?.customer_notified_at) return false
-  const { subject, html, text } = orderEmail(order, storeName)
+  if (kind === 'created' && order?.customer_notified_at) return false
+  const { subject, html, text } = orderEmail(order, storeName, kind)
   const result = await sendEmail({ to, subject, html, text })
   if (!result.ok) return false
-  try {
-    await sb(`/orders?id=eq.${encodeURIComponent(order.id)}`, {
-      method: 'PATCH',
-      prefer: 'return=minimal',
-      payload: { customer_notified_at: new Date().toISOString() }
-    })
-  } catch {
-    // nao critico
+  if (kind === 'created') {
+    try {
+      await sb(`/orders?id=eq.${encodeURIComponent(order.id)}`, {
+        method: 'PATCH',
+        prefer: 'return=minimal',
+        payload: { customer_notified_at: new Date().toISOString() }
+      })
+    } catch {
+      // nao critico
+    }
   }
   return true
+}
+
+// Compatibilidade: e-mail inicial de criacao/retomada.
+export async function sendCustomerOrderEmail(order: any, storeName: string): Promise<boolean> {
+  return sendOrderKindEmail(order, storeName, 'created')
 }

@@ -6,13 +6,14 @@ import {
   sb
 } from '../_shared/supabase.ts'
 import { mpSellerToken, publicApiUrl } from '../_shared/mp.ts'
-import { notify, sendCustomerOrderEmail } from '../_shared/email.ts'
+import { notify, sendCustomerOrderEmail, sendOrderKindEmail } from '../_shared/email.ts'
 
 function orderTotal(order: any): number {
   const items = Array.isArray(order?.items) ? order.items : []
   let sum = 0
   for (const it of items) sum += Number(it?.price || 0) * Number(it?.qty || 1)
-  if (sum > 0) return sum
+  const fee = Number(order?.delivery_fee || 0)
+  if (sum > 0) return sum + fee
   return Number(order?.total || 0)
 }
 
@@ -121,7 +122,7 @@ export async function createPix(req: Request, body: Record<string, unknown>) {
   })
 }
 
-// Aviso publico do pedido (apos criar). So envia ao e-mail gravado no pedido.
+// Aviso publico do pedido (apos criar / status). So envia ao e-mail gravado no pedido.
 export async function orderNotify(req: Request, body: Record<string, unknown>) {
   const storeId = String(body.store_id || '')
   const orderId = String(body.order_id || '')
@@ -130,8 +131,11 @@ export async function orderNotify(req: Request, body: Record<string, unknown>) {
   if (!order) return json({ ok: false, error: 'Pedido nao encontrado' })
   if (String(order.store_id) !== storeId) return json({ ok: false, error: 'Pedido nao pertence a loja' })
   if (!tokenOk(order, body.public_token)) return json({ ok: false, error: 'Pedido nao autorizado' })
+  const kind = String(body.kind || 'created')
   const store = await fetchStoreOwner(storeId)
-  return json({ ok: true, sent: await sendCustomerOrderEmail(order, store && store.name) })
+  const allowed = ['created', 'paid', 'shipped', 'expired']
+  const which: any = allowed.indexOf(kind) !== -1 ? kind : 'created'
+  return json({ ok: true, sent: await sendOrderKindEmail(order, store && store.name, which) })
 }
 
 // Reembolsa um pedido pago na conta do vendedor (estorno sai do saldo dele).

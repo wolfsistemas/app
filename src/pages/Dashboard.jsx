@@ -7,7 +7,8 @@ import PhotoInput from '../components/PhotoInput.jsx'
 import PImg from '../components/PImg.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { cancelSubscription, createCheckout, createSubscription, syncSubscription, billingUrl, mpBillingAvailable } from '../lib/billing.js'
-import { connectMp, deleteAccount, disconnectMp, refundPayment, testPush } from '../lib/payments.js'
+import { connectMp, deleteAccount, disconnectMp, notifyOrder, refundPayment, testPush } from '../lib/payments.js'
+import { formatAddress } from '../lib/delivery.js'
 import { deleteAllMyPhotos } from '../lib/upload.js'
 import { disablePush, enablePush, hasLocalPushSubscription, pushSupported } from '../lib/push.js'
 import { FREE_PRODUCT_LIMIT, formatPhone, isProStore, money, onlyDigits, PLAN_PRICE, planExpiresAt, publicUrl, slugify, timeAgo, uid } from '../lib/format.js'
@@ -261,6 +262,20 @@ export default function Dashboard() {
     }
   }
 
+  function addZone() {
+    setForm({ ...form, delivery_zones: [...(form.delivery_zones || []), { name: '', fee: 0, cep_start: '', cep_end: '' }] })
+  }
+
+  function updateZone(idx, patch) {
+    const zones = [...(form.delivery_zones || [])]
+    zones[idx] = { ...zones[idx], ...patch }
+    setForm({ ...form, delivery_zones: zones })
+  }
+
+  function removeZone(idx) {
+    setForm({ ...form, delivery_zones: (form.delivery_zones || []).filter((_, i) => i !== idx) })
+  }
+
   async function changeStatus(order, value) {
     if (value === order.status) return
     setError('')
@@ -278,6 +293,9 @@ export default function Dashboard() {
         showToast('Pedido cancelado e valor estornado', 'ok')
       } else {
         await updateOrder(order.id, { status: value })
+        if (value === 'enviado' && order.public_token) {
+          notifyOrder({ storeId, orderId: order.id, publicToken: order.public_token, kind: 'shipped' }).catch(() => {})
+        }
       }
     } catch (err) {
       const msg = err.message || 'Não foi possível atualizar o pedido.'
@@ -535,6 +553,55 @@ export default function Dashboard() {
                 value={form.avatar_url || ''}
                 onChange={(url) => setForm({ ...form, avatar_url: url })}
               />
+
+              <h3 style={{ marginTop: 18 }}>Entrega e retirada</h3>
+              <label className="row" style={{ gap: 8, alignItems: 'center' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={form.delivery_enabled !== false} onChange={(e) => setForm({ ...form, delivery_enabled: e.target.checked })} />
+                Faço entrega
+              </label>
+              <label>Prazo de entrega</label>
+              <input value={form.delivery_time || ''} onChange={(e) => setForm({ ...form, delivery_time: e.target.value })} placeholder="Ex.: 1 a 2 dias úteis" />
+              <div className="row" style={{ gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label>Frete grátis acima de (R$)</label>
+                  <input type="number" min="0" step="0.01" value={form.free_delivery_above ?? 0} onChange={(e) => setForm({ ...form, free_delivery_above: e.target.value === '' ? 0 : e.target.value })} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label>Pedido mínimo (R$)</label>
+                  <input type="number" min="0" step="0.01" value={form.min_order ?? 0} onChange={(e) => setForm({ ...form, min_order: e.target.value === '' ? 0 : e.target.value })} />
+                </div>
+              </div>
+              <label className="row" style={{ gap: 8, alignItems: 'center' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={form.pickup_enabled !== false} onChange={(e) => setForm({ ...form, pickup_enabled: e.target.checked })} />
+                Aceito retirada na loja
+              </label>
+              {form.pickup_enabled !== false && (
+                <>
+                  <label>Endereço de retirada (opcional)</label>
+                  <input value={form.pickup_address || ''} onChange={(e) => setForm({ ...form, pickup_address: e.target.value })} placeholder="Rua, número, bairro" />
+                </>
+              )}
+
+              <label>Regiões de entrega (por faixa de CEP)</label>
+              <p className="help">Sem regiões, o frete é combinado no WhatsApp. Com regiões, só entregamos nos CEPs cadastrados.</p>
+              {(form.delivery_zones || []).map((z, idx) => (
+                <div className="stack" key={idx} style={{ gap: 6, border: '1px solid var(--line, #e5e0d5)', borderRadius: 10, padding: 8 }}>
+                  <div className="row" style={{ gap: 8 }}>
+                    <input style={{ flex: 2 }} placeholder="Nome (ex.: Centro)" value={z.name || ''} onChange={(e) => updateZone(idx, { name: e.target.value })} />
+                    <input style={{ flex: 1 }} type="number" min="0" step="0.01" placeholder="Frete (R$)" value={z.fee ?? 0} onChange={(e) => updateZone(idx, { fee: e.target.value === '' ? 0 : e.target.value })} />
+                    <button type="button" className="btn-x" aria-label="Remover região" onClick={() => removeZone(idx)}>×</button>
+                  </div>
+                  <div className="row" style={{ gap: 8 }}>
+                    <input style={{ flex: 1 }} inputMode="numeric" placeholder="CEP inicial" value={z.cep_start || ''} onChange={(e) => updateZone(idx, { cep_start: onlyDigits(e.target.value).slice(0, 8) })} />
+                    <input style={{ flex: 1 }} inputMode="numeric" placeholder="CEP final" value={z.cep_end || ''} onChange={(e) => updateZone(idx, { cep_end: onlyDigits(e.target.value).slice(0, 8) })} />
+                  </div>
+                </div>
+              ))}
+              <button type="button" className="btn btn-ghost" onClick={addZone}>Adicionar região</button>
+
+              <label>Política de trocas e devoluções</label>
+              <textarea value={form.return_policy || ''} onChange={(e) => setForm({ ...form, return_policy: e.target.value })} placeholder="Ex.: Trocas em até 7 dias, produto sem uso e com embalagem." />
+
               <button className="btn btn-dark" onClick={() => persistStore(form, 'Vitrine salva')}>Salvar vitrine</button>
             </div>
           </section>
@@ -655,9 +722,23 @@ export default function Dashboard() {
                   return (
                     <tr key={o.id}>
                       <td>{timeAgo(o.created_at)}</td>
-                      <td>{o.customer_name || 'Cliente'}</td>
+                      <td>
+                        <div>{o.customer_name || 'Cliente'}</div>
+                        {o.delivery_type && (
+                          <div className="tiny muted">
+                            {o.delivery_type === 'retirada' ? 'Retirada' : `Entrega${o.delivery_zone ? ` · ${o.delivery_zone}` : ''}`}
+                            {o.customer_phone ? ` · ${o.customer_phone}` : ''}
+                          </div>
+                        )}
+                        {o.delivery_type === 'entrega' && formatAddress(o.address) && (
+                          <div className="tiny muted">{formatAddress(o.address)}</div>
+                        )}
+                      </td>
                       <td>{(o.items || []).map((i) => `${i.qty}x ${i.name}`).join(', ')}</td>
-                      <td>{money(o.total)}</td>
+                      <td>
+                        {money(o.total)}
+                        {Number(o.delivery_fee || 0) > 0 && <div className="tiny muted">+ frete {money(o.delivery_fee)}</div>}
+                      </td>
                       <td><span className={`chip status-${pay.tone}`}>{pay.label}</span></td>
                       <td>
                         <select value={o.status} onChange={(e) => changeStatus(o, e.target.value)}>
@@ -671,7 +752,7 @@ export default function Dashboard() {
                       </td>
                       <td>
                         {next ? (
-                          <button type="button" className="btn btn-dark" onClick={() => updateOrder(o.id, { status: next.to })}>
+                          <button type="button" className="btn btn-dark" onClick={() => changeStatus(o, next.to)}>
                             {next.label}
                           </button>
                         ) : (
