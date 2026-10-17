@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://wolfsistemas.github.io/app/sitemap.xml
